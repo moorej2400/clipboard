@@ -89,6 +89,48 @@ Common files:
 - `trusted_devices.json` (hub)
 - `tls-key.pem` and `tls-cert.pem` (hub)
 
+## Windows Startup Task (Recommended)
+
+For reliable clipboard sync on Windows, run the agent in the interactive user session at logon.
+
+Create script (once):
+```bat
+@echo off
+setlocal
+cd /d C:\Users\Jared.Moore\Dev\repos\apps\clipboard
+set AGENT_AUTO_TRUST_FINGERPRINT=1
+"C:\Program Files\nodejs\node.exe" src\index.js agent --hub wss://192.168.0.168:4242 --fingerprint "C1:B1:93:42:01:25:30:A6:CC:08:37:4F:59:92:C9:72:C6:7F:95:21:FD:06:83:8B:FF:59:DF:38:BC:F4:AD:F1" >> "%USERPROFILE%\clipboard-agent.log" 2>&1
+endlocal
+```
+
+Create startup task:
+```bat
+schtasks /Create /TN "ClipboardSyncAgent" /TR "cmd.exe /c \"C:\Users\Jared.Moore\Dev\repos\apps\clipboard\scripts\start-agent.cmd\"" /SC ONLOGON /RU "INT\jared.moore" /RL HIGHEST /IT /F
+```
+
+Run immediately:
+```bat
+schtasks /Run /TN "ClipboardSyncAgent"
+```
+
+Verify:
+```bat
+netstat -ano | findstr "192.168.0.168:4242"
+```
+Look for `ESTABLISHED`.
+
+## Setup Notes Learned In Practice
+
+- Keep hub running before starting agents.
+- If Windows shows `SYN_SENT`, the hub is not reachable yet.
+- If `authToken` stays `null`, pairing/auth did not complete for that agent session.
+- Use the hub fingerprint from `device-info.md` for first secure join.
+- Run Windows agent in the interactive desktop session. Service-only/background contexts can use a different clipboard context and break real sync behavior.
+- Keep machines on latest `main` when pairing issues appear, because recent fixes include:
+- Agent staying alive after startup.
+- UTF-8 BOM-safe JSON state parsing.
+- Empty clipboard handling on Windows (`Element not found` treated as empty text).
+
 ## E2E Testing (Host + Docker)
 
 The project includes an automated end-to-end test that validates bidirectional sync between:
