@@ -293,6 +293,7 @@ async function startAgent({ hubUrl, pairCode, expectedFingerprint, localDevice, 
   });
 
   await connect();
+  await new Promise(() => {});
 }
 
 module.exports = {
