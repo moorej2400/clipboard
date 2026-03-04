@@ -125,7 +125,7 @@ function isString(value) {
   return typeof value === "string" && value.length > 0;
 }
 
-async function startHub({ port, bindAddress, localDevice, paths }) {
+async function startHub({ port, bindAddress, localDevice, paths, logger }) {
   const tlsMaterial = buildTlsMaterial(paths);
   const pairCode = generatePairCode();
   const autoApprovePairing = process.env.HUB_AUTO_APPROVE_PAIRING === "1";
@@ -196,8 +196,20 @@ async function startHub({ port, bindAddress, localDevice, paths }) {
         if (tokenIsValid) {
           state.authenticated = true;
           ws.send(JSON.stringify({ type: MESSAGE_TYPES.AUTH_OK }));
+          if (logger) {
+            logger.info("hub_auth_succeeded", {
+              deviceId: message.deviceId,
+              deviceName: message.deviceName
+            });
+          }
         } else {
           ws.send(JSON.stringify({ type: MESSAGE_TYPES.AUTH_REQUIRED }));
+          if (logger) {
+            logger.info("hub_auth_required", {
+              deviceId: message.deviceId,
+              deviceName: message.deviceName
+            });
+          }
         }
         return;
       }
@@ -209,6 +221,12 @@ async function startHub({ port, bindAddress, localDevice, paths }) {
         }
         if (message.pairCode !== pairCode) {
           ws.send(JSON.stringify({ type: MESSAGE_TYPES.PAIR_RESULT, ok: false, reason: "Invalid pairing code" }));
+          if (logger) {
+            logger.warn("hub_pairing_invalid_code", {
+              deviceId: message.deviceId,
+              deviceName: message.deviceName
+            });
+          }
           return;
         }
 
@@ -226,6 +244,12 @@ async function startHub({ port, bindAddress, localDevice, paths }) {
 
         if (!approved) {
           ws.send(JSON.stringify({ type: MESSAGE_TYPES.PAIR_RESULT, ok: false, reason: "Pairing denied by operator" }));
+          if (logger) {
+            logger.warn("hub_pairing_denied", {
+              deviceId: message.deviceId,
+              deviceName: message.deviceName
+            });
+          }
           return;
         }
 
@@ -241,6 +265,12 @@ async function startHub({ port, bindAddress, localDevice, paths }) {
         state.authenticated = true;
         ws.send(JSON.stringify({ type: MESSAGE_TYPES.PAIR_RESULT, ok: true, authToken }));
         ws.send(JSON.stringify({ type: MESSAGE_TYPES.AUTH_OK }));
+        if (logger) {
+          logger.info("hub_pairing_approved", {
+            deviceId: message.deviceId,
+            deviceName: message.deviceName
+          });
+        }
         return;
       }
 
@@ -265,6 +295,7 @@ async function startHub({ port, bindAddress, localDevice, paths }) {
           text: message.text
         });
 
+        let delivered = 0;
         for (const [clientSocket, clientState] of clients.entries()) {
           if (clientSocket === ws) {
             continue;
@@ -276,6 +307,15 @@ async function startHub({ port, bindAddress, localDevice, paths }) {
             continue;
           }
           clientSocket.send(outbound);
+          delivered += 1;
+        }
+        if (logger) {
+          logger.info("hub_clipboard_event_relayed", {
+            eventId: message.eventId,
+            originDeviceId: message.originDeviceId,
+            deliveredToClients: delivered,
+            textLength: typeof message.text === "string" ? message.text.length : 0
+          });
         }
       }
     });

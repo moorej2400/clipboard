@@ -1,5 +1,6 @@
 const readline = require("readline");
 const WebSocket = require("ws");
+const crypto = require("crypto");
 const { makeClipboardEvent, MESSAGE_TYPES, safeParseMessage } = require("./protocol");
 const { readClipboardText, writeClipboardText } = require("./clipboard");
 
@@ -25,7 +26,15 @@ function isString(value) {
   return typeof value === "string" && value.length > 0;
 }
 
-async function startAgent({ hubUrl, pairCode, expectedFingerprint, localDevice, saveLocalDevice }) {
+function summarizeText(text) {
+  const normalized = typeof text === "string" ? text : "";
+  return {
+    textLength: normalized.length,
+    textHash: crypto.createHash("sha256").update(normalized).digest("hex").slice(0, 16)
+  };
+}
+
+async function startAgent({ hubUrl, pairCode, expectedFingerprint, localDevice, saveLocalDevice, logger }) {
   const autoTrustFingerprint = process.env.AGENT_AUTO_TRUST_FINGERPRINT === "1";
   let currentPairCode = isString(pairCode) ? pairCode : null;
   let reconnectDelayMs = 1000;
@@ -42,6 +51,13 @@ async function startAgent({ hubUrl, pairCode, expectedFingerprint, localDevice, 
     lastClipboardText = await readClipboardText();
   } catch (_error) {
     lastClipboardText = "";
+  }
+  if (logger) {
+    logger.info("agent_start", {
+      deviceId: localDevice.deviceId,
+      deviceName: localDevice.deviceName,
+      hubUrl
+    });
   }
 
   function cleanupSeenEvents() {
@@ -66,13 +82,39 @@ async function startAgent({ hubUrl, pairCode, expectedFingerprint, localDevice, 
   }
 
   async function handleIncomingClipboardEvent(message) {
+    if (logger) {
+      logger.info("clipboard_event_received", {
+        direction: "remote_to_local",
+        eventId: message.eventId,
+        originDeviceId: message.originDeviceId,
+        timestamp: message.timestamp,
+        ...summarizeText(message.text)
+      });
+    }
     if (!isString(message.eventId) || typeof message.timestamp !== "number" || typeof message.text !== "string") {
+      if (logger) {
+        logger.warn("clipboard_event_ignored_malformed", {
+          eventId: message.eventId || null
+        });
+      }
       return;
     }
     if (seenEventIds.has(message.eventId)) {
+      if (logger) {
+        logger.info("clipboard_event_ignored_duplicate", {
+          eventId: message.eventId
+        });
+      }
       return;
     }
     if (message.timestamp < lastAppliedTimestamp) {
+      if (logger) {
+        logger.info("clipboard_event_ignored_stale", {
+          eventId: message.eventId,
+          eventTimestamp: message.timestamp,
+          lastAppliedTimestamp
+        });
+      }
       return;
     }
 
@@ -86,8 +128,21 @@ async function startAgent({ hubUrl, pairCode, expectedFingerprint, localDevice, 
     try {
       await writeClipboardText(message.text);
       lastClipboardText = message.text;
+      if (logger) {
+        logger.info("clipboard_event_applied", {
+          direction: "remote_to_local",
+          eventId: message.eventId,
+          ...summarizeText(message.text)
+        });
+      }
     } catch (error) {
       console.error(`Failed to write clipboard: ${error.message}`);
+      if (logger) {
+        logger.error("clipboard_apply_failed", {
+          eventId: message.eventId,
+          error: error.message
+        });
+      }
     }
   }
 
@@ -105,6 +160,11 @@ async function startAgent({ hubUrl, pairCode, expectedFingerprint, localDevice, 
         currentText = await readClipboardText();
       } catch (error) {
         console.error(`Failed to read clipboard: ${error.message}`);
+        if (logger) {
+          logger.error("clipboard_read_failed", {
+            error: error.message
+          });
+        }
         return;
       }
 
@@ -112,7 +172,20 @@ async function startAgent({ hubUrl, pairCode, expectedFingerprint, localDevice, 
         return;
       }
 
+      if (logger) {
+        logger.info("clipboard_local_change_detected", {
+          direction: "local_to_remote",
+          ...summarizeText(currentText)
+        });
+      }
+
       if (Date.now() < suppressBroadcastUntil) {
+        if (logger) {
+          logger.info("clipboard_local_change_suppressed", {
+            reason: "suppression_window",
+            ...summarizeText(currentText)
+          });
+        }
         return;
       }
 
@@ -121,6 +194,14 @@ async function startAgent({ hubUrl, pairCode, expectedFingerprint, localDevice, 
       seenEventIds.set(event.eventId, Date.now());
       cleanupSeenEvents();
       ws.send(JSON.stringify(event));
+      if (logger) {
+        logger.info("clipboard_event_emitted", {
+          direction: "local_to_remote",
+          eventId: event.eventId,
+          timestamp: event.timestamp,
+          ...summarizeText(currentText)
+        });
+      }
     }, 500);
   }
 
@@ -190,10 +271,16 @@ async function startAgent({ hubUrl, pairCode, expectedFingerprint, localDevice, 
 
     ws.on("open", async () => {
       reconnectDelayMs = 1000;
+      if (logger) {
+        logger.info("hub_socket_open", { hubUrl });
+      }
       const certificateIsTrusted = await verifyAndTrustHubCertificate(ws._socket);
       if (!certificateIsTrusted) {
         stopped = true;
         ws.close();
+        if (logger) {
+          logger.warn("hub_socket_closed_untrusted_cert", { hubUrl });
+        }
         return;
       }
 
@@ -216,11 +303,17 @@ async function startAgent({ hubUrl, pairCode, expectedFingerprint, localDevice, 
       if (message.type === MESSAGE_TYPES.AUTH_OK) {
         authenticated = true;
         startClipboardPolling();
+        if (logger) {
+          logger.info("agent_authenticated", { deviceId: localDevice.deviceId });
+        }
         return;
       }
 
       if (message.type === MESSAGE_TYPES.AUTH_REQUIRED) {
         authenticated = false;
+        if (logger) {
+          logger.info("agent_auth_required", { deviceId: localDevice.deviceId });
+        }
         const code = await getPairCode();
         ws.send(
           JSON.stringify({
@@ -239,10 +332,19 @@ async function startAgent({ hubUrl, pairCode, expectedFingerprint, localDevice, 
           localDevice.hubUrl = hubUrl;
           persistLocalState();
           currentPairCode = null;
+          if (logger) {
+            logger.info("pairing_succeeded", { deviceId: localDevice.deviceId });
+          }
           return;
         }
 
         console.error(`Pairing failed: ${message.reason || "Unknown reason"}`);
+        if (logger) {
+          logger.warn("pairing_failed", {
+            deviceId: localDevice.deviceId,
+            reason: message.reason || "Unknown reason"
+          });
+        }
         currentPairCode = null;
         const retryCode = await getPairCode();
         ws.send(
@@ -264,6 +366,9 @@ async function startAgent({ hubUrl, pairCode, expectedFingerprint, localDevice, 
     ws.on("close", () => {
       authenticated = false;
       stopClipboardPolling();
+      if (logger) {
+        logger.warn("hub_socket_closed", { hubUrl });
+      }
       if (!stopped) {
         scheduleReconnect();
       }
@@ -271,6 +376,12 @@ async function startAgent({ hubUrl, pairCode, expectedFingerprint, localDevice, 
 
     ws.on("error", (error) => {
       console.error(`Hub connection error: ${error.message}`);
+      if (logger) {
+        logger.error("hub_socket_error", {
+          hubUrl,
+          error: error.message
+        });
+      }
     });
   }
 

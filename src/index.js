@@ -6,6 +6,7 @@ const { randomUUID } = require("crypto");
 const { startHub } = require("./hub");
 const { startAgent } = require("./agent");
 const { getPaths, readJson, writeJson } = require("./store");
+const { createLogger } = require("./logger");
 
 function parseCli(argv) {
   const mode = argv[0];
@@ -147,6 +148,7 @@ async function main() {
   }
 
   const paths = getPaths();
+  const logger = createLogger(paths.baseDir);
   const localDevice = loadLocalDevice(paths, options.name);
   const markdownPath = path.join(process.cwd(), "device-info.md");
 
@@ -157,7 +159,8 @@ async function main() {
       port,
       bindAddress,
       localDevice,
-      paths
+      paths,
+      logger
     });
     writeDeviceInfoMarkdown(
       markdownPath,
@@ -200,7 +203,8 @@ async function main() {
     pairCode: typeof options.code === "string" ? options.code : null,
     expectedFingerprint: typeof options.fingerprint === "string" ? options.fingerprint : null,
     localDevice,
-    saveLocalDevice: (updated) => saveLocalDevice(paths, updated)
+    saveLocalDevice: (updated) => saveLocalDevice(paths, updated),
+    logger
   });
 }
 
