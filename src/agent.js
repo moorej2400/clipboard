@@ -26,6 +26,7 @@ function isString(value) {
 }
 
 async function startAgent({ hubUrl, pairCode, expectedFingerprint, localDevice, saveLocalDevice }) {
+  const autoTrustFingerprint = process.env.AGENT_AUTO_TRUST_FINGERPRINT === "1";
   let currentPairCode = isString(pairCode) ? pairCode : null;
   let reconnectDelayMs = 1000;
   let authenticated = false;
@@ -111,11 +112,11 @@ async function startAgent({ hubUrl, pairCode, expectedFingerprint, localDevice, 
         return;
       }
 
-      lastClipboardText = currentText;
       if (Date.now() < suppressBroadcastUntil) {
         return;
       }
 
+      lastClipboardText = currentText;
       const event = makeClipboardEvent(localDevice.deviceId, currentText);
       seenEventIds.set(event.eventId, Date.now());
       cleanupSeenEvents();
@@ -162,9 +163,11 @@ async function startAgent({ hubUrl, pairCode, expectedFingerprint, localDevice, 
     if (!isString(localDevice.hubFingerprint)) {
       // This is trust-on-first-use: we pin the first accepted fingerprint so future
       // sessions can reject unexpected certificate changes on the LAN.
-      const accepted = await promptYesNo(
-        `Trust hub certificate fingerprint ${fingerprint}? (y/n): `
-      );
+      const accepted = autoTrustFingerprint
+        ? true
+        : await promptYesNo(
+            `Trust hub certificate fingerprint ${fingerprint}? (y/n): `
+          );
       if (!accepted) {
         return false;
       }
