@@ -23,6 +23,23 @@ async function getClipboardy() {
   return module.default || module;
 }
 
+function classifyWindowsClipboardReadFailure(message) {
+  const normalized = String(message || "");
+  if (/Element not found/i.test(normalized)) {
+    return "element_not_found";
+  }
+  if (/The operation completed successfully/i.test(normalized)) {
+    return "operation_completed_successfully_bug";
+  }
+  if (/Could not paste from clipboard/i.test(normalized) && /code:\s*0/i.test(normalized)) {
+    return "paste_failed_code_0";
+  }
+  if (/Could not paste from clipboard/i.test(normalized) && /code:\s*1168/i.test(normalized)) {
+    return "paste_failed_code_1168";
+  }
+  return null;
+}
+
 async function readClipboardText() {
   if (getClipboardBackend() === "file") {
     const filePath = getClipboardFilePath();
@@ -41,8 +58,12 @@ async function readClipboardText() {
     return await clipboardy.read();
   } catch (error) {
     const message = String((error && error.message) || error || "");
-    if (process.platform === "win32" && /Element not found/i.test(message)) {
-      return "";
+    if (process.platform === "win32") {
+      const reason = classifyWindowsClipboardReadFailure(message);
+      if (reason) {
+        error.clipboardTransient = true;
+        error.clipboardReason = reason;
+      }
     }
     throw error;
   }

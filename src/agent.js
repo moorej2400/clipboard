@@ -45,6 +45,8 @@ async function startAgent({ hubUrl, pairCode, expectedFingerprint, localDevice, 
   let suppressBroadcastUntil = 0;
   let lastAppliedTimestamp = 0;
   let lastClipboardText = "";
+  let clipboardReadErrorCount = 0;
+  let lastClipboardReadErrorKey = "";
   const seenEventIds = new Map();
 
   try {
@@ -158,11 +160,30 @@ async function startAgent({ hubUrl, pairCode, expectedFingerprint, localDevice, 
       let currentText;
       try {
         currentText = await readClipboardText();
+        if (clipboardReadErrorCount > 0 && logger) {
+          logger.info("clipboard_read_recovered", {
+            previousConsecutiveErrors: clipboardReadErrorCount
+          });
+        }
+        clipboardReadErrorCount = 0;
+        lastClipboardReadErrorKey = "";
       } catch (error) {
-        console.error(`Failed to read clipboard: ${error.message}`);
+        clipboardReadErrorCount += 1;
+        const transient = Boolean(error && error.clipboardTransient);
+        const reason = transient ? error.clipboardReason || "unknown_transient" : null;
+        const errorMessage = String(error && error.message ? error.message : error);
+        const errorKey = `${reason || "generic"}:${errorMessage}`;
+        const shouldConsoleLog = !transient || errorKey !== lastClipboardReadErrorKey || clipboardReadErrorCount % 50 === 0;
+        if (shouldConsoleLog) {
+          console.error(`Failed to read clipboard: ${errorMessage}`);
+        }
+        lastClipboardReadErrorKey = errorKey;
         if (logger) {
-          logger.error("clipboard_read_failed", {
-            error: error.message
+          logger.warn("clipboard_read_issue", {
+            transient,
+            reason,
+            error: errorMessage,
+            consecutiveErrorCount: clipboardReadErrorCount
           });
         }
         return;
