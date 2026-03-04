@@ -5,6 +5,9 @@ const path = require("path");
 const APP_FOLDER = "clipboard-sync";
 
 function getAppDataDir() {
+  if (process.env.CLIPBOARD_SYNC_DATA_DIR) {
+    return process.env.CLIPBOARD_SYNC_DATA_DIR;
+  }
   if (process.platform === "darwin") {
     return path.join(os.homedir(), "Library", "Application Support", APP_FOLDER);
   }

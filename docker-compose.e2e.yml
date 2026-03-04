@@ -1,0 +1,20 @@
+services:
+  agent:
+    image: node:20-bookworm
+    working_dir: /app
+    volumes:
+      - ./:/app
+      - ${E2E_SHARED_DIR}:/e2e
+    environment:
+      CLIPBOARD_BACKEND: file
+      CLIPBOARD_FILE_PATH: /e2e/container-clipboard.txt
+      CLIPBOARD_SYNC_DATA_DIR: /e2e/container-state
+      AGENT_AUTO_TRUST_FINGERPRINT: "1"
+      HUB_URL: wss://host.docker.internal:${HUB_PORT}
+      PAIR_CODE: ${PAIR_CODE}
+      HUB_FINGERPRINT: ${HUB_FINGERPRINT}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    command: >
+      bash -lc "npm install --no-audit --no-fund &&
+      node src/index.js agent --hub ${HUB_URL} --code ${PAIR_CODE} --name container-agent --fingerprint '${HUB_FINGERPRINT}'"

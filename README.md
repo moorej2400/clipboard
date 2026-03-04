@@ -88,3 +88,29 @@ Common files:
 - `local_device.json`
 - `trusted_devices.json` (hub)
 - `tls-key.pem` and `tls-cert.pem` (hub)
+
+## E2E Testing (Host + Docker)
+
+The project includes an automated end-to-end test that validates bidirectional sync between:
+- host hub + host agent
+- Docker Linux agent
+
+The test uses a deterministic file clipboard backend instead of the real OS clipboard so it can run reliably in containerized environments.
+
+### Prerequisites
+
+- Node.js 18+
+- Docker with Compose (`docker compose` or `docker-compose`)
+
+### Run E2E
+
+```bash
+npm install
+npm run test:e2e
+```
+
+### What The Test Verifies
+
+1. Host clipboard change propagates to container agent.
+2. Container clipboard change propagates to host agent.
+3. Pairing and TLS trust complete in non-interactive test mode.

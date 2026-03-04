@@ -9,6 +9,9 @@ const { MESSAGE_TYPES, safeParseMessage } = require("./protocol");
 const { readJson, writeJson } = require("./store");
 
 function generatePairCode() {
+  if (typeof process.env.HUB_PAIR_CODE === "string" && /^[0-9]{6}$/.test(process.env.HUB_PAIR_CODE)) {
+    return process.env.HUB_PAIR_CODE;
+  }
   return String(Math.floor(100000 + Math.random() * 900000));
 }
 
@@ -125,6 +128,7 @@ function isString(value) {
 async function startHub({ port, bindAddress, localDevice, paths }) {
   const tlsMaterial = buildTlsMaterial(paths);
   const pairCode = generatePairCode();
+  const autoApprovePairing = process.env.HUB_AUTO_APPROVE_PAIRING === "1";
 
   const trustedState = normalizeTrustedState(readJson(paths.trustedDevices, { trustedDevices: [] }));
   const trustedByDeviceId = new Map(trustedState.trustedDevices.map((entry) => [entry.deviceId, entry]));
@@ -213,10 +217,12 @@ async function startHub({ port, bindAddress, localDevice, paths }) {
 
         // The pairing code is intentionally not sufficient on its own; explicit hub-side approval
         // prevents passive exposure of clipboard data when someone learns the code.
-        const approved = await approvals.enqueue({
-          deviceId: message.deviceId,
-          deviceName: message.deviceName
-        });
+        const approved = autoApprovePairing
+          ? true
+          : await approvals.enqueue({
+              deviceId: message.deviceId,
+              deviceName: message.deviceName
+            });
 
         if (!approved) {
           ws.send(JSON.stringify({ type: MESSAGE_TYPES.PAIR_RESULT, ok: false, reason: "Pairing denied by operator" }));
