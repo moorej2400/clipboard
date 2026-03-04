@@ -37,7 +37,15 @@ async function readClipboardText() {
   }
 
   const clipboardy = await getClipboardy();
-  return clipboardy.read();
+  try {
+    return await clipboardy.read();
+  } catch (error) {
+    const message = String((error && error.message) || error || "");
+    if (process.platform === "win32" && /Element not found/i.test(message)) {
+      return "";
+    }
+    throw error;
+  }
 }
 
 async function writeClipboardText(text) {
