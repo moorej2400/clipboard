@@ -88,9 +88,3 @@ Common files:
 - `local_device.json`
 - `trusted_devices.json` (hub)
 - `tls-key.pem` and `tls-cert.pem` (hub)
-
-## Limitations (Current Scope)
-
-- Text clipboard only (no images/files)
-- Local network focus (no internet/NAT traversal support)
-- No GUI, CLI-only operation
