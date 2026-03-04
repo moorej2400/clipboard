@@ -1,0 +1,19 @@
+{
+  "name": "clipboard-sync",
+  "version": "1.0.0",
+  "description": "Bare-bones cross-platform clipboard sync for macOS and Windows",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "start:hub": "node src/index.js hub",
+    "start:agent": "node src/index.js agent"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "dependencies": {
+    "clipboardy": "^4.0.0",
+    "selfsigned": "^3.0.1",
+    "ws": "^8.18.0"
+  }
+}
