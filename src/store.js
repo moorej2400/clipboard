@@ -36,7 +36,9 @@ function getPaths() {
 
 function readJson(filePath, fallbackValue) {
   try {
-    return JSON.parse(fs.readFileSync(filePath, "utf8"));
+    const raw = fs.readFileSync(filePath, "utf8");
+    const sanitized = raw.replace(/^\uFEFF/, "");
+    return JSON.parse(sanitized);
   } catch (error) {
     if (error && error.code === "ENOENT") {
       return fallbackValue;
