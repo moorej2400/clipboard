@@ -42,10 +42,27 @@ src/
   index.js       CLI entrypoint and startup flow
   hub.js         WSS hub server, pairing, trust, relay
   agent.js       Hub client, clipboard polling, remote apply
+  macwhisper.js  macOS MacWhisper dictation polling source
   clipboard.js   Clipboard read/write wrapper
   protocol.js    Message schema helpers
   store.js       Local JSON persistence helpers
 ```
+
+## MacWhisper Dictation Sync (macOS)
+
+When running in `agent` mode on macOS, the app auto-detects local MacWhisper dictations at:
+
+`~/Library/Application Support/MacWhisper/Database/main.sqlite`
+
+If found, the agent polls for newly created dictations and:
+- writes the new dictation text to local clipboard immediately
+- emits a normal `clipboard_event` so trusted peers receive it
+
+Behavior details:
+- Local MacWhisper path only (iCloud mirror is not used)
+- Future-only on startup (existing historical dictations are not replayed)
+- Text preference: `processedText` fallback to `transcribedText`
+- Offline-safe: latest new dictation is queued and broadcast after reconnect
 
 ## Getting Started
 
@@ -149,6 +166,12 @@ The test uses a deterministic file clipboard backend instead of the real OS clip
 ```bash
 npm install
 npm run test:e2e
+```
+
+### Run Unit Tests
+
+```bash
+npm run test:unit
 ```
 
 ### What The Test Verifies

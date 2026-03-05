@@ -3,6 +3,10 @@ const WebSocket = require("ws");
 const crypto = require("crypto");
 const { makeClipboardEvent, MESSAGE_TYPES, safeParseMessage } = require("./protocol");
 const { readClipboardText, writeClipboardText } = require("./clipboard");
+const { createMacWhisperSource } = require("./macwhisper");
+
+const CLIPBOARD_POLL_INTERVAL_MS = 500;
+const DICTATION_POLL_INTERVAL_MS = 500;
 
 function promptInput(question) {
   return new Promise((resolve) => {
@@ -41,13 +45,17 @@ async function startAgent({ hubUrl, pairCode, expectedFingerprint, localDevice, 
   let authenticated = false;
   let stopped = false;
   let ws = null;
-  let pollTimer = null;
+  let clipboardPollTimer = null;
+  let dictationPollTimer = null;
+  let dictationPollInFlight = false;
   let suppressBroadcastUntil = 0;
   let lastAppliedTimestamp = 0;
   let lastClipboardText = "";
+  let pendingDictationText = null;
   let clipboardReadErrorCount = 0;
   let lastClipboardReadErrorKey = "";
   const seenEventIds = new Map();
+  const macWhisperSource = createMacWhisperSource();
 
   try {
     lastClipboardText = await readClipboardText();
@@ -69,6 +77,34 @@ async function startAgent({ hubUrl, pairCode, expectedFingerprint, localDevice, 
         seenEventIds.delete(eventId);
       }
     }
+  }
+
+  function canSendClipboardEvent() {
+    return authenticated && !!ws && ws.readyState === WebSocket.OPEN;
+  }
+
+  function emitClipboardEvent(text, metadata = null) {
+    if (!canSendClipboardEvent()) {
+      return false;
+    }
+
+    const event = makeClipboardEvent(localDevice.deviceId, text);
+    seenEventIds.set(event.eventId, Date.now());
+    cleanupSeenEvents();
+    ws.send(JSON.stringify(event));
+
+    if (logger) {
+      logger.info("clipboard_event_emitted", {
+        direction: "local_to_remote",
+        eventId: event.eventId,
+        timestamp: event.timestamp,
+        source: metadata && metadata.source ? metadata.source : "clipboard_poll",
+        ...(metadata && metadata.dictationId ? { dictationId: metadata.dictationId } : {}),
+        ...summarizeText(text)
+      });
+    }
+
+    return true;
   }
 
   async function getPairCode() {
@@ -148,11 +184,92 @@ async function startAgent({ hubUrl, pairCode, expectedFingerprint, localDevice, 
     }
   }
 
-  function startClipboardPolling() {
-    if (pollTimer) {
+  async function applyDictationText(text, dictationId) {
+    try {
+      await writeClipboardText(text);
+      lastClipboardText = text;
+      if (logger) {
+        logger.info("dictation_text_applied", {
+          source: "macwhisper",
+          dictationId: dictationId || null,
+          ...summarizeText(text)
+        });
+      }
+      return true;
+    } catch (error) {
+      console.error(`Failed to write clipboard from dictation: ${error.message}`);
+      if (logger) {
+        logger.error("dictation_clipboard_apply_failed", {
+          source: "macwhisper",
+          dictationId: dictationId || null,
+          error: error.message
+        });
+      }
+      return false;
+    }
+  }
+
+  async function flushPendingDictationEvent() {
+    if (!isString(pendingDictationText)) {
       return;
     }
-    pollTimer = setInterval(async () => {
+    if (!canSendClipboardEvent()) {
+      return;
+    }
+
+    suppressBroadcastUntil = Date.now() + 1500;
+    const emitted = emitClipboardEvent(pendingDictationText, {
+      source: "macwhisper_reconnect_flush"
+    });
+    if (emitted) {
+      pendingDictationText = null;
+    }
+  }
+
+  async function handleNewDictation(dictation) {
+    if (!dictation || !isString(dictation.text)) {
+      return;
+    }
+
+    if (logger) {
+      logger.info("dictation_detected", {
+        source: "macwhisper",
+        dictationId: dictation.idHex || null,
+        dateCreated: isString(dictation.dateCreated) ? dictation.dateCreated : null,
+        ...summarizeText(dictation.text)
+      });
+    }
+
+    const wroteClipboard = await applyDictationText(dictation.text, dictation.idHex);
+    if (!wroteClipboard) {
+      return;
+    }
+
+    if (canSendClipboardEvent()) {
+      suppressBroadcastUntil = Date.now() + 1500;
+      emitClipboardEvent(dictation.text, {
+        source: "macwhisper_poll",
+        dictationId: dictation.idHex
+      });
+      pendingDictationText = null;
+      return;
+    }
+
+    pendingDictationText = dictation.text;
+    if (logger) {
+      logger.info("dictation_event_queued_offline", {
+        source: "macwhisper",
+        dictationId: dictation.idHex || null,
+        ...summarizeText(dictation.text)
+      });
+    }
+  }
+
+  function startClipboardPolling() {
+    if (clipboardPollTimer) {
+      return;
+    }
+    clipboardPollTimer = setInterval(async () => {
       if (!authenticated || !ws || ws.readyState !== WebSocket.OPEN) {
         return;
       }
@@ -211,27 +328,76 @@ async function startAgent({ hubUrl, pairCode, expectedFingerprint, localDevice, 
       }
 
       lastClipboardText = currentText;
-      const event = makeClipboardEvent(localDevice.deviceId, currentText);
-      seenEventIds.set(event.eventId, Date.now());
-      cleanupSeenEvents();
-      ws.send(JSON.stringify(event));
-      if (logger) {
-        logger.info("clipboard_event_emitted", {
-          direction: "local_to_remote",
-          eventId: event.eventId,
-          timestamp: event.timestamp,
-          ...summarizeText(currentText)
-        });
-      }
-    }, 500);
+      emitClipboardEvent(currentText, { source: "clipboard_poll" });
+    }, CLIPBOARD_POLL_INTERVAL_MS);
   }
 
   function stopClipboardPolling() {
-    if (!pollTimer) {
+    if (!clipboardPollTimer) {
       return;
     }
-    clearInterval(pollTimer);
-    pollTimer = null;
+    clearInterval(clipboardPollTimer);
+    clipboardPollTimer = null;
+  }
+
+  function startDictationPolling() {
+    if (dictationPollTimer || !macWhisperSource.isEnabled()) {
+      return;
+    }
+
+    dictationPollTimer = setInterval(async () => {
+      if (dictationPollInFlight || stopped) {
+        return;
+      }
+
+      dictationPollInFlight = true;
+      try {
+        const newDictations = await macWhisperSource.pollNewDictationsSinceHighWater();
+        for (const dictation of newDictations) {
+          await handleNewDictation(dictation);
+        }
+      } finally {
+        dictationPollInFlight = false;
+      }
+    }, DICTATION_POLL_INTERVAL_MS);
+  }
+
+  function stopDictationPolling() {
+    if (!dictationPollTimer) {
+      return;
+    }
+    clearInterval(dictationPollTimer);
+    dictationPollTimer = null;
+  }
+
+  async function initializeDictationPolling() {
+    if (!macWhisperSource.isEnabled()) {
+      return;
+    }
+
+    const initState = await macWhisperSource.initializeHighWaterMark();
+    if (!initState.enabled || !initState.dbPath) {
+      if (macWhisperSource.isEnabled()) {
+        if (logger) {
+          logger.warn("dictation_polling_init_degraded", {
+            source: "macwhisper",
+            dbPath: macWhisperSource.getDbPath()
+          });
+        }
+        startDictationPolling();
+      }
+      return;
+    }
+
+    if (logger) {
+      logger.info("dictation_polling_enabled", {
+        source: "macwhisper",
+        dbPath: initState.dbPath
+      });
+    } else {
+      console.log(`MacWhisper dictation polling enabled at ${initState.dbPath}`);
+    }
+    startDictationPolling();
   }
 
   function scheduleReconnect() {
@@ -298,6 +464,7 @@ async function startAgent({ hubUrl, pairCode, expectedFingerprint, localDevice, 
       const certificateIsTrusted = await verifyAndTrustHubCertificate(ws._socket);
       if (!certificateIsTrusted) {
         stopped = true;
+        stopDictationPolling();
         ws.close();
         if (logger) {
           logger.warn("hub_socket_closed_untrusted_cert", { hubUrl });
@@ -324,6 +491,7 @@ async function startAgent({ hubUrl, pairCode, expectedFingerprint, localDevice, 
       if (message.type === MESSAGE_TYPES.AUTH_OK) {
         authenticated = true;
         startClipboardPolling();
+        await flushPendingDictationEvent();
         if (logger) {
           logger.info("agent_authenticated", { deviceId: localDevice.deviceId });
         }
@@ -409,6 +577,7 @@ async function startAgent({ hubUrl, pairCode, expectedFingerprint, localDevice, 
   process.on("SIGINT", () => {
     stopped = true;
     stopClipboardPolling();
+    stopDictationPolling();
     if (ws && ws.readyState === WebSocket.OPEN) {
       ws.close();
     }
@@ -418,12 +587,14 @@ async function startAgent({ hubUrl, pairCode, expectedFingerprint, localDevice, 
   process.on("SIGTERM", () => {
     stopped = true;
     stopClipboardPolling();
+    stopDictationPolling();
     if (ws && ws.readyState === WebSocket.OPEN) {
       ws.close();
     }
     process.exit(0);
   });
 
+  await initializeDictationPolling();
   await connect();
   await new Promise(() => {});
 }

@@ -7,6 +7,7 @@
     "start": "node src/index.js",
     "start:hub": "node src/index.js hub",
     "start:agent": "node src/index.js agent",
+    "test:unit": "node --test test/unit/*.test.js",
     "test:e2e": "node --test test/e2e/clipboard-sync.e2e.test.js",
     "e2e:up": "docker compose -f docker-compose.e2e.yml up -d --remove-orphans",
     "e2e:down": "docker compose -f docker-compose.e2e.yml down -v --remove-orphans"
