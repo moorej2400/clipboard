@@ -38,6 +38,43 @@ function summarizeText(text) {
   };
 }
 
+function enqueuePendingDictationEvent(queue, dictation) {
+  if (!Array.isArray(queue) || !dictation || !isString(dictation.text)) {
+    return 0;
+  }
+
+  queue.push({
+    text: dictation.text,
+    dictationId: isString(dictation.idHex) ? dictation.idHex : null
+  });
+
+  return queue.length;
+}
+
+function flushPendingDictationEvents(queue, canSendClipboardEvent, emitClipboardEvent) {
+  if (!Array.isArray(queue) || typeof canSendClipboardEvent !== "function" || typeof emitClipboardEvent !== "function") {
+    return 0;
+  }
+
+  let flushed = 0;
+  while (queue.length > 0 && canSendClipboardEvent()) {
+    const nextEvent = queue[0];
+    const emitted = emitClipboardEvent(nextEvent.text, {
+      source: "macwhisper_reconnect_flush",
+      dictationId: nextEvent.dictationId
+    });
+
+    if (!emitted) {
+      break;
+    }
+
+    queue.shift();
+    flushed += 1;
+  }
+
+  return flushed;
+}
+
 async function startAgent({ hubUrl, pairCode, expectedFingerprint, localDevice, saveLocalDevice, logger }) {
   const autoTrustFingerprint = process.env.AGENT_AUTO_TRUST_FINGERPRINT === "1";
   let currentPairCode = isString(pairCode) ? pairCode : null;
@@ -51,7 +88,7 @@ async function startAgent({ hubUrl, pairCode, expectedFingerprint, localDevice, 
   let suppressBroadcastUntil = 0;
   let lastAppliedTimestamp = 0;
   let lastClipboardText = "";
-  let pendingDictationText = null;
+  const pendingDictationEvents = [];
   let clipboardReadErrorCount = 0;
   let lastClipboardReadErrorKey = "";
   const seenEventIds = new Map();
@@ -210,19 +247,27 @@ async function startAgent({ hubUrl, pairCode, expectedFingerprint, localDevice, 
   }
 
   async function flushPendingDictationEvent() {
-    if (!isString(pendingDictationText)) {
+    if (pendingDictationEvents.length === 0) {
       return;
     }
     if (!canSendClipboardEvent()) {
       return;
     }
 
-    suppressBroadcastUntil = Date.now() + 1500;
-    const emitted = emitClipboardEvent(pendingDictationText, {
-      source: "macwhisper_reconnect_flush"
-    });
-    if (emitted) {
-      pendingDictationText = null;
+    const flushed = flushPendingDictationEvents(
+      pendingDictationEvents,
+      canSendClipboardEvent,
+      (text, metadata) => {
+        suppressBroadcastUntil = Date.now() + 1500;
+        return emitClipboardEvent(text, metadata);
+      }
+    );
+
+    if (flushed > 0 && logger) {
+      logger.info("dictation_event_flush_succeeded", {
+        source: "macwhisper",
+        flushedCount: flushed
+      });
     }
   }
 
@@ -251,15 +296,16 @@ async function startAgent({ hubUrl, pairCode, expectedFingerprint, localDevice, 
         source: "macwhisper_poll",
         dictationId: dictation.idHex
       });
-      pendingDictationText = null;
+      pendingDictationEvents.length = 0;
       return;
     }
 
-    pendingDictationText = dictation.text;
+    enqueuePendingDictationEvent(pendingDictationEvents, dictation);
     if (logger) {
       logger.info("dictation_event_queued_offline", {
         source: "macwhisper",
         dictationId: dictation.idHex || null,
+        pendingQueueLength: pendingDictationEvents.length,
         ...summarizeText(dictation.text)
       });
     }
@@ -600,5 +646,7 @@ async function startAgent({ hubUrl, pairCode, expectedFingerprint, localDevice, 
 }
 
 module.exports = {
+  enqueuePendingDictationEvent,
+  flushPendingDictationEvents,
   startAgent
 };
