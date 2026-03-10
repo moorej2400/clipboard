@@ -4,6 +4,7 @@ const os = require("os");
 const path = require("path");
 
 const DEFAULT_POLL_BATCH_SIZE = 50;
+const PENDING_ROW_TTL_MS = 10 * 60 * 1000;
 const SQLITE_WARN_THROTTLE_MS = 10000;
 
 function getDefaultMacWhisperDbPath(homeDir = os.homedir()) {
@@ -84,10 +85,32 @@ SELECT json_object(
   'text', COALESCE(NULLIF(processedText, ''), transcribedText)
 )
 FROM dictation
-WHERE dateDeleted IS NULL
-  AND length(trim(COALESCE(NULLIF(processedText, ''), transcribedText))) > 0${cursorClause}
+WHERE dateDeleted IS NULL${cursorClause}
 ORDER BY dateCreated ASC, id ASC
 LIMIT ${Number(limit)};
+`.trim();
+}
+
+function buildPendingRowsQuery(pendingIds) {
+  const ids = Array.isArray(pendingIds)
+    ? pendingIds.map(normalizeHex).filter(Boolean)
+    : [];
+
+  if (ids.length === 0) {
+    return null;
+  }
+
+  const idList = ids.map((id) => `x'${id}'`).join(", ");
+  return `
+SELECT json_object(
+  'idHex', lower(hex(id)),
+  'dateCreated', dateCreated,
+  'text', COALESCE(NULLIF(processedText, ''), transcribedText)
+)
+FROM dictation
+WHERE dateDeleted IS NULL
+  AND id IN (${idList})
+ORDER BY dateCreated ASC, id ASC;
 `.trim();
 }
 
@@ -103,6 +126,7 @@ function createMacWhisperSource(options = {}) {
   let sqliteReady = false;
   let sqliteMissingLogged = false;
   let lastSqliteWarnAt = 0;
+  const pendingRows = new Map();
 
   async function runJsonQuery(sql) {
     const result = await execFileAsync("sqlite3", ["-readonly", dbPath, sql]);
@@ -187,6 +211,36 @@ function createMacWhisperSource(options = {}) {
     }
 
     const collected = [];
+    const pendingCutoff = Date.now() - PENDING_ROW_TTL_MS;
+    for (const [idHex, row] of pendingRows.entries()) {
+      if (!row || typeof row.firstSeenAt !== "number" || row.firstSeenAt < pendingCutoff) {
+        pendingRows.delete(idHex);
+      }
+    }
+
+    if (pendingRows.size > 0) {
+      try {
+        const pendingSql = buildPendingRowsQuery([...pendingRows.keys()]);
+        const pendingResults = pendingSql ? await runJsonQuery(pendingSql) : [];
+        for (const row of pendingResults) {
+          if (!row || !isNonEmptyString(row.idHex)) {
+            continue;
+          }
+          if (!isNonEmptyString(row.text)) {
+            continue;
+          }
+          pendingRows.delete(row.idHex);
+          collected.push({
+            idHex: row.idHex,
+            dateCreated: row.dateCreated,
+            text: row.text
+          });
+        }
+      } catch (error) {
+        logThrottledWarning(`MacWhisper pending-row polling query failed: ${error.message}`);
+      }
+    }
+
     while (true) {
       const sql = buildNewRowsQuery({
         cursor,
@@ -207,12 +261,23 @@ function createMacWhisperSource(options = {}) {
 
       for (const row of rows) {
         if (!row || !isNonEmptyString(row.idHex) || !isNonEmptyString(row.dateCreated) || !isNonEmptyString(row.text)) {
+          if (row && isNonEmptyString(row.idHex) && isNonEmptyString(row.dateCreated)) {
+            cursor = {
+              idHex: row.idHex,
+              dateCreated: row.dateCreated
+            };
+            pendingRows.set(row.idHex, {
+              dateCreated: row.dateCreated,
+              firstSeenAt: Date.now()
+            });
+          }
           continue;
         }
         cursor = {
           idHex: row.idHex,
           dateCreated: row.dateCreated
         };
+        pendingRows.delete(row.idHex);
         collected.push({
           idHex: row.idHex,
           dateCreated: row.dateCreated,

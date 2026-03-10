@@ -131,3 +131,47 @@ WHERE hex(id) = '000000000000000A';
   const secondPoll = await source.pollNewDictationsSinceHighWater();
   assert.deepEqual(secondPoll, []);
 });
+
+test("MacWhisper polling resolves late-filled rows even after newer rows advance the cursor", { skip: !SQLITE_AVAILABLE }, async () => {
+  const { dbPath } = createTempDb();
+  const source = createMacWhisperSource({
+    platform: "darwin",
+    dbPath
+  });
+
+  await source.initializeHighWaterMark();
+
+  insertDictation(dbPath, {
+    idHex: "000000000000000B",
+    dateCreated: "2026-03-04 21:10:00.000",
+    transcribedText: "",
+    processedText: ""
+  });
+
+  assert.deepEqual(await source.pollNewDictationsSinceHighWater(), []);
+
+  insertDictation(dbPath, {
+    idHex: "000000000000000C",
+    dateCreated: "2026-03-04 21:10:01.000",
+    transcribedText: "newer row",
+    processedText: "newer processed"
+  });
+
+  const newerRows = await source.pollNewDictationsSinceHighWater();
+  assert.equal(newerRows.length, 1);
+  assert.equal(newerRows[0].idHex, "000000000000000c");
+
+  runSql(
+    dbPath,
+    `
+UPDATE dictation
+SET processedText = 'late filled row'
+WHERE hex(id) = '000000000000000B';
+`.trim()
+  );
+
+  const lateFilledRows = await source.pollNewDictationsSinceHighWater();
+  assert.equal(lateFilledRows.length, 1);
+  assert.equal(lateFilledRows[0].idHex, "000000000000000b");
+  assert.equal(lateFilledRows[0].text, "late filled row");
+});
