@@ -81,12 +81,19 @@ npm run start:hub
 Hub startup:
 - Prints the current pairing code
 - Prints/listens on LAN endpoint(s)
+- Persists `wss://127.0.0.1:4242` for the hub machine itself so local restarts stay attached
 - Generates `device-info.md` with connection and fingerprint details
 
 ### 3) Start agent machine(s)
 
 ```bash
 npm run start:agent -- --hub wss://<hub-ip>:4242 --code <pair-code> --fingerprint "<fingerprint>"
+```
+
+If the agent runs on the same machine as the hub, prefer:
+
+```bash
+npm run start:agent -- --hub wss://127.0.0.1:4242 --code <pair-code> --fingerprint "<fingerprint>"
 ```
 
 On first join:
@@ -116,9 +123,11 @@ Create script (once):
 setlocal
 cd /d C:\Users\Jared.Moore\Dev\repos\apps\clipboard
 set AGENT_AUTO_TRUST_FINGERPRINT=1
-"C:\Program Files\nodejs\node.exe" src\index.js agent --hub wss://192.168.0.168:4242 --fingerprint "C1:B1:93:42:01:25:30:A6:CC:08:37:4F:59:92:C9:72:C6:7F:95:21:FD:06:83:8B:FF:59:DF:38:BC:F4:AD:F1" >> "%USERPROFILE%\clipboard-agent.log" 2>&1
+"C:\Program Files\nodejs\node.exe" src\index.js agent --hub wss://<hub-ip>:4242 --fingerprint "C1:B1:93:42:01:25:30:A6:CC:08:37:4F:59:92:C9:72:C6:7F:95:21:FD:06:83:8B:FF:59:DF:38:BC:F4:AD:F1" >> "%USERPROFILE%\clipboard-agent.log" 2>&1
 endlocal
 ```
+
+Replace `<hub-ip>` with the current LAN endpoint shown in `device-info.md` on the hub machine.
 
 Create startup task:
 ```bat
@@ -132,7 +141,7 @@ schtasks /Run /TN "ClipboardSyncAgent"
 
 Verify:
 ```bat
-netstat -ano | findstr "192.168.0.168:4242"
+netstat -ano | findstr "<hub-ip>:4242"
 ```
 Look for `ESTABLISHED`.
 

@@ -61,6 +61,14 @@ function getLanAddresses() {
   return Array.from(new Set(ips));
 }
 
+function getLoopbackHubUrl(port) {
+  return `wss://127.0.0.1:${port}`;
+}
+
+function getLanHubUrls(port) {
+  return getLanAddresses().map((ip) => `wss://${ip}:${port}`);
+}
+
 function saveLocalDevice(paths, localDevice) {
   writeJson(paths.localDevice, localDevice);
 }
@@ -88,7 +96,8 @@ function writeDeviceInfoMarkdown(markdownPath, content) {
 }
 
 function buildHubMarkdown({ deviceName, deviceId, port, pairCode, certFingerprint256 }) {
-  const urls = getLanAddresses().map((ip) => `wss://${ip}:${port}`);
+  const localUrl = getLoopbackHubUrl(port);
+  const lanUrls = getLanHubUrls(port);
   return [
     "# Clipboard Sync Device Info",
     "",
@@ -102,15 +111,23 @@ function buildHubMarkdown({ deviceName, deviceId, port, pairCode, certFingerprin
     "## Pairing",
     `- Pairing Code: ${pairCode}`,
     "",
-    "## Hub Endpoints",
-    ...urls.map((url) => `- ${url}`),
+    "## Local Hub Endpoint",
+    `- ${localUrl}`,
+    "",
+    "## LAN Hub Endpoints",
+    ...lanUrls.map((url) => `- ${url}`),
     "",
     "## TLS",
     `- Certificate Fingerprint (SHA-256): ${certFingerprint256}`,
     "",
-    "## Agent Join Example",
+    "## Local Agent Join Example",
     "```bash",
-    `node src/index.js agent --hub ${urls[0]} --code ${pairCode} --fingerprint "${certFingerprint256}"`,
+    `node src/index.js agent --hub ${localUrl} --code ${pairCode} --fingerprint "${certFingerprint256}"`,
+    "```",
+    "",
+    "## Remote Agent Join Example",
+    "```bash",
+    `node src/index.js agent --hub ${lanUrls[0]} --code ${pairCode} --fingerprint "${certFingerprint256}"`,
     "```",
     ""
   ].join("\n");
@@ -162,6 +179,10 @@ async function main() {
       paths,
       logger
     });
+    // Persist loopback for the hub machine itself so local agent restarts do not
+    // depend on whichever LAN IP this host happened to have when it last paired.
+    localDevice.hubUrl = getLoopbackHubUrl(port);
+    saveLocalDevice(paths, localDevice);
     writeDeviceInfoMarkdown(
       markdownPath,
       buildHubMarkdown({
