@@ -78,6 +78,16 @@ npm install
 npm run start:hub
 ```
 
+This saves the local role as `hub` in `local_device.json`.
+
+Daily startup on that same machine can then use:
+
+```bash
+npm start
+```
+
+`npm start` on a hub-configured machine starts the hub and then starts the local agent against `wss://127.0.0.1:<port>`.
+
 Hub startup:
 - Prints the current pairing code
 - Prints/listens on LAN endpoint(s)
@@ -89,6 +99,16 @@ Hub startup:
 ```bash
 npm run start:agent -- --hub wss://<hub-ip>:4242 --code <pair-code> --fingerprint "<fingerprint>"
 ```
+
+This saves the local role as `agent` in `local_device.json`.
+
+After that initial setup, daily startup can use:
+
+```bash
+npm start
+```
+
+`npm start` on an agent-configured machine starts only the agent using the stored hub settings.
 
 If the agent runs on the same machine as the hub, prefer:
 
