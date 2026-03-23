@@ -81,6 +81,27 @@ function isValidRole(value) {
   return DEVICE_ROLES.has(value);
 }
 
+function inferStoredRole(paths, localDevice) {
+  if (isValidRole(localDevice.role)) {
+    return localDevice.role;
+  }
+
+  const hasHubState = fs.existsSync(paths.trustedDevices) || fs.existsSync(paths.tlsKey) || fs.existsSync(paths.tlsCert);
+  if (hasHubState) {
+    return "hub";
+  }
+
+  const hasAgentState =
+    (typeof localDevice.hubUrl === "string" && localDevice.hubUrl.length > 0) ||
+    (typeof localDevice.hubFingerprint === "string" && localDevice.hubFingerprint.length > 0) ||
+    (typeof localDevice.authToken === "string" && localDevice.authToken.length > 0);
+  if (hasAgentState) {
+    return "agent";
+  }
+
+  return null;
+}
+
 function loadLocalDevice(paths, requestedName) {
   const existing = readJson(paths.localDevice, null);
   const localDevice = {
@@ -102,6 +123,7 @@ function loadLocalDevice(paths, requestedName) {
         ? existing.hubBindAddress
         : "0.0.0.0"
   };
+  localDevice.role = inferStoredRole(paths, localDevice);
   saveLocalDevice(paths, localDevice);
   return localDevice;
 }
@@ -332,5 +354,6 @@ if (require.main === module) {
 module.exports = {
   parseCli,
   loadLocalDevice,
-  isValidRole
+  isValidRole,
+  inferStoredRole
 };
