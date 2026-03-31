@@ -4,6 +4,7 @@ const crypto = require("crypto");
 const { makeClipboardEvent, MESSAGE_TYPES, safeParseMessage } = require("./protocol");
 const { readClipboardText, writeClipboardText } = require("./clipboard");
 const { createMacWhisperSource } = require("./macwhisper");
+const { createMacClipboardPolicy } = require("./macClipboardPolicy");
 
 const CLIPBOARD_POLL_INTERVAL_MS = 500;
 const DICTATION_POLL_INTERVAL_MS = 500;
@@ -93,6 +94,7 @@ async function startAgent({ hubUrl, pairCode, expectedFingerprint, localDevice, 
   let lastClipboardReadErrorKey = "";
   const seenEventIds = new Map();
   const macWhisperSource = createMacWhisperSource();
+  const macClipboardPolicy = createMacClipboardPolicy();
 
   try {
     lastClipboardText = await readClipboardText();
@@ -142,6 +144,59 @@ async function startAgent({ hubUrl, pairCode, expectedFingerprint, localDevice, 
     }
 
     return true;
+  }
+
+  async function notifyOutboundClipboardSync(metadata) {
+    try {
+      await macClipboardPolicy.notifyOutboundSyncSent();
+    } catch (error) {
+      if (logger) {
+        logger.warn("clipboard_send_sound_failed", {
+          source: metadata && metadata.source ? metadata.source : "clipboard_poll",
+          error: error.message
+        });
+      }
+    }
+  }
+
+  async function attemptOutboundClipboardSync(text, metadata = null) {
+    if (!canSendClipboardEvent()) {
+      return {
+        sent: false,
+        reason: "socket_unavailable"
+      };
+    }
+
+    const policyDecision = await macClipboardPolicy.shouldAllowOutboundSync();
+    if (!policyDecision.allowed) {
+      if (logger) {
+        logger.warn("clipboard_event_blocked_local_policy", {
+          source: metadata && metadata.source ? metadata.source : "clipboard_poll",
+          policyReason: policyDecision.reason,
+          sessionTitle: policyDecision.expectedTitle || macClipboardPolicy.getSessionTitle(),
+          ...(Array.isArray(policyDecision.observedWindowTitles)
+            ? { observedWindowTitles: policyDecision.observedWindowTitles }
+            : {}),
+          ...(policyDecision.error ? { error: policyDecision.error } : {}),
+          ...summarizeText(text)
+        });
+      }
+
+      return {
+        sent: false,
+        reason: "local_policy_blocked"
+      };
+    }
+
+    const sent = emitClipboardEvent(text, metadata);
+    if (sent) {
+      await notifyOutboundClipboardSync(metadata);
+    }
+
+    return {
+      sent,
+      reason: sent ? "sent" : "emit_failed"
+    };
   }
 
   async function getPairCode() {
@@ -254,14 +309,32 @@ async function startAgent({ hubUrl, pairCode, expectedFingerprint, localDevice, 
       return;
     }
 
-    const flushed = flushPendingDictationEvents(
-      pendingDictationEvents,
-      canSendClipboardEvent,
-      (text, metadata) => {
-        suppressBroadcastUntil = Date.now() + 1500;
-        return emitClipboardEvent(text, metadata);
+    let flushed = 0;
+    while (pendingDictationEvents.length > 0 && canSendClipboardEvent()) {
+      const nextEvent = pendingDictationEvents[0];
+      suppressBroadcastUntil = Date.now() + 1500;
+      const result = await attemptOutboundClipboardSync(nextEvent.text, {
+        source: "macwhisper_reconnect_flush",
+        dictationId: nextEvent.dictationId
+      });
+
+      if (!result.sent) {
+        if (result.reason === "local_policy_blocked") {
+          const droppedCount = pendingDictationEvents.length;
+          pendingDictationEvents.length = 0;
+          if (logger) {
+            logger.warn("dictation_event_dropped_local_policy", {
+              source: "macwhisper_reconnect_flush",
+              droppedCount
+            });
+          }
+        }
+        break;
       }
-    );
+
+      pendingDictationEvents.shift();
+      flushed += 1;
+    }
 
     if (flushed > 0 && logger) {
       logger.info("dictation_event_flush_succeeded", {
@@ -292,11 +365,26 @@ async function startAgent({ hubUrl, pairCode, expectedFingerprint, localDevice, 
 
     if (canSendClipboardEvent()) {
       suppressBroadcastUntil = Date.now() + 1500;
-      emitClipboardEvent(dictation.text, {
+      const result = await attemptOutboundClipboardSync(dictation.text, {
         source: "macwhisper_poll",
         dictationId: dictation.idHex
       });
-      pendingDictationEvents.length = 0;
+      if (result.sent) {
+        pendingDictationEvents.length = 0;
+        return;
+      }
+
+      if (result.reason === "local_policy_blocked") {
+        if (logger) {
+          logger.warn("dictation_event_dropped_local_policy", {
+            source: "macwhisper_poll",
+            dictationId: dictation.idHex || null,
+            ...summarizeText(dictation.text)
+          });
+        }
+        return;
+      }
+
       return;
     }
 
@@ -374,7 +462,7 @@ async function startAgent({ hubUrl, pairCode, expectedFingerprint, localDevice, 
       }
 
       lastClipboardText = currentText;
-      emitClipboardEvent(currentText, { source: "clipboard_poll" });
+      await attemptOutboundClipboardSync(currentText, { source: "clipboard_poll" });
     }, CLIPBOARD_POLL_INTERVAL_MS);
   }
 

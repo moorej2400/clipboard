@@ -64,6 +64,23 @@ Behavior details:
 - Text preference: `processedText` fallback to `transcribedText`
 - Offline-safe: latest new dictation is queued and broadcast after reconnect
 
+## macOS Windows App Gate
+
+On macOS, outbound clipboard sync is gated by `Windows App` window state before any local text clipboard or MacWhisper text event is sent.
+
+Current behavior:
+- The gate only runs on macOS.
+- The gate first checks `Windows App` through `System Events`.
+- The default session name is `Solera PC`.
+- If the `Solera PC` window is not visible, the gate falls back to the active `Windows App` RDP connection for the `Solera PC` bookmark.
+- Each outbound clipboard or MacWhisper event that is actually sent plays a local notification sound.
+
+Notes:
+- The default required window title is `Solera PC`.
+- You can override that title with `MAC_WINDOWS_APP_SESSION_TITLE`.
+- You can override the sound file with `MAC_CLIPBOARD_SEND_SOUND_PATH`.
+- You can override the `Windows App` bookmark database path with `MAC_WINDOWS_APP_DATA_DB_PATH`.
+
 ## Getting Started
 
 ### 1) Install dependencies
