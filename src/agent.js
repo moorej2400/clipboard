@@ -31,6 +31,10 @@ function isString(value) {
   return typeof value === "string" && value.length > 0;
 }
 
+function shouldSyncClipboardText(text) {
+  return typeof text === "string" && text.length > 0;
+}
+
 function summarizeText(text) {
   const normalized = typeof text === "string" ? text : "";
   return {
@@ -89,6 +93,7 @@ async function startAgent({ hubUrl, pairCode, expectedFingerprint, localDevice, 
   let suppressBroadcastUntil = 0;
   let lastAppliedTimestamp = 0;
   let lastClipboardText = "";
+  let lastObservedClipboardText = "";
   const pendingDictationEvents = [];
   let clipboardReadErrorCount = 0;
   let lastClipboardReadErrorKey = "";
@@ -101,6 +106,7 @@ async function startAgent({ hubUrl, pairCode, expectedFingerprint, localDevice, 
   } catch (_error) {
     lastClipboardText = "";
   }
+  lastObservedClipboardText = lastClipboardText;
   if (logger) {
     logger.info("agent_start", {
       deviceId: localDevice.deviceId,
@@ -229,6 +235,14 @@ async function startAgent({ hubUrl, pairCode, expectedFingerprint, localDevice, 
       }
       return;
     }
+    if (!shouldSyncClipboardText(message.text)) {
+      if (logger) {
+        logger.info("clipboard_event_ignored_empty", {
+          eventId: message.eventId
+        });
+      }
+      return;
+    }
     if (seenEventIds.has(message.eventId)) {
       if (logger) {
         logger.info("clipboard_event_ignored_duplicate", {
@@ -258,6 +272,7 @@ async function startAgent({ hubUrl, pairCode, expectedFingerprint, localDevice, 
     try {
       await writeClipboardText(message.text);
       lastClipboardText = message.text;
+      lastObservedClipboardText = message.text;
       if (logger) {
         logger.info("clipboard_event_applied", {
           direction: "remote_to_local",
@@ -435,6 +450,21 @@ async function startAgent({ hubUrl, pairCode, expectedFingerprint, localDevice, 
             reason,
             error: errorMessage,
             consecutiveErrorCount: clipboardReadErrorCount
+          });
+        }
+        return;
+      }
+
+      if (currentText === lastObservedClipboardText) {
+        return;
+      }
+
+      lastObservedClipboardText = currentText;
+
+      if (!shouldSyncClipboardText(currentText)) {
+        if (logger) {
+          logger.info("clipboard_local_change_ignored_empty", {
+            direction: "local_to_remote"
           });
         }
         return;
@@ -736,5 +766,6 @@ async function startAgent({ hubUrl, pairCode, expectedFingerprint, localDevice, 
 module.exports = {
   enqueuePendingDictationEvent,
   flushPendingDictationEvents,
+  shouldSyncClipboardText,
   startAgent
 };

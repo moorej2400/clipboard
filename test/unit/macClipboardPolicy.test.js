@@ -1,7 +1,19 @@
 const assert = require("node:assert/strict");
 const test = require("node:test");
 
-const { createMacClipboardPolicy, DEFAULT_WINDOWS_APP_SESSION_TITLE } = require("../../src/macClipboardPolicy");
+const {
+  buildAfplayArgs,
+  createMacClipboardPolicy,
+  DEFAULT_WINDOWS_APP_SESSION_TITLE
+} = require("../../src/macClipboardPolicy");
+
+test("mac clipboard policy builds afplay args with the default 95 percent volume", () => {
+  assert.deepEqual(buildAfplayArgs("/System/Library/Sounds/Submarine.aiff"), [
+    "-v",
+    "0.95",
+    "/System/Library/Sounds/Submarine.aiff"
+  ]);
+});
 
 test("mac clipboard policy allows outbound sync on non-mac platforms without checking Windows App", async () => {
   let getWindowTitlesCalled = false;
@@ -24,14 +36,28 @@ test("mac clipboard policy allows outbound sync when Windows App has the configu
   const policy = createMacClipboardPolicy({
     platform: "darwin",
     sessionTitle: DEFAULT_WINDOWS_APP_SESSION_TITLE,
-    getWindowTitles: async () => ["", "Solera PC"]
+    getWindowTitles: async () => ["", "Remote PC"]
   });
 
   const result = await policy.shouldAllowOutboundSync();
 
   assert.equal(result.allowed, true);
   assert.equal(result.reason, "session_window_open");
-  assert.equal(result.matchedTitle, "Solera PC");
+  assert.equal(result.matchedTitle, "Remote PC");
+});
+
+test("mac clipboard policy allows outbound sync when a Windows App window title contains the configured session token", async () => {
+  const policy = createMacClipboardPolicy({
+    platform: "darwin",
+    sessionTitle: "Finance Desktop",
+    getWindowTitles: async () => ["", "Training VM - Finance East"]
+  });
+
+  const result = await policy.shouldAllowOutboundSync();
+
+  assert.equal(result.allowed, true);
+  assert.equal(result.reason, "session_window_open");
+  assert.equal(result.matchedTitle, "Training VM - Finance East");
 });
 
 test("mac clipboard policy blocks outbound sync when Windows App session window is not open", async () => {
@@ -56,6 +82,7 @@ test("mac clipboard policy blocks outbound sync when window detection fails", as
     getWindowTitles: async () => {
       throw new Error("Automation not permitted");
     },
+    getBookmarkedHosts: async () => [],
     getBookmarkedHost: async () => null,
     listActiveRdpConnections: async () => []
   });
@@ -72,15 +99,51 @@ test("mac clipboard policy allows outbound sync when the configured bookmark hos
     platform: "darwin",
     sessionTitle: DEFAULT_WINDOWS_APP_SESSION_TITLE,
     getWindowTitles: async () => [],
-    getBookmarkedHost: async () => "192.168.0.23",
-    listActiveRdpConnections: async () => [{ remoteHost: "192.168.0.23", remotePort: 3389 }]
+    getBookmarkedHosts: async () => ["192.0.2.23"],
+    getBookmarkedHost: async () => "192.0.2.23",
+    listActiveRdpConnections: async () => [{ remoteHost: "192.0.2.23", remotePort: 3389 }]
   });
 
   const result = await policy.shouldAllowOutboundSync();
 
   assert.equal(result.allowed, true);
   assert.equal(result.reason, "active_rdp_connection");
-  assert.equal(result.remoteHost, "192.168.0.23");
+  assert.equal(result.remoteHost, "192.0.2.23");
+});
+
+test("mac clipboard policy allows outbound sync when the bookmark host resolves to the active RDP connection IP", async () => {
+  const policy = createMacClipboardPolicy({
+    platform: "darwin",
+    sessionTitle: DEFAULT_WINDOWS_APP_SESSION_TITLE,
+    getWindowTitles: async () => ["Devices"],
+    getBookmarkedHost: async () => "remote-pc.example.test",
+    listActiveRdpConnections: async () => [{ remoteHost: "198.51.100.208", remotePort: 3389 }],
+    lookupHostAddresses: async () => ["198.51.100.208"]
+  });
+
+  const result = await policy.shouldAllowOutboundSync();
+
+  assert.equal(result.allowed, true);
+  assert.equal(result.reason, "active_rdp_connection");
+  assert.equal(result.remoteHost, "198.51.100.208");
+});
+
+test("mac clipboard policy allows outbound sync when a bookmark variant resolves to the active RDP connection", async () => {
+  const policy = createMacClipboardPolicy({
+    platform: "darwin",
+    sessionTitle: DEFAULT_WINDOWS_APP_SESSION_TITLE,
+    getWindowTitles: async () => [],
+    getBookmarkedHost: async () => null,
+    getBookmarkedHosts: async () => ["remote-pc.example.test", "192.0.2.23"],
+    listActiveRdpConnections: async () => [{ remoteHost: "198.51.100.208", remotePort: 3389 }],
+    lookupHostAddresses: async (host) => (host === "remote-pc.example.test" ? ["198.51.100.208"] : [])
+  });
+
+  const result = await policy.shouldAllowOutboundSync();
+
+  assert.equal(result.allowed, true);
+  assert.equal(result.reason, "active_rdp_connection");
+  assert.equal(result.remoteHost, "198.51.100.208");
 });
 
 test("mac clipboard policy plays a send sound only on macOS", async () => {

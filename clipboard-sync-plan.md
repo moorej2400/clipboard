@@ -66,7 +66,7 @@
 ## Public Interfaces and Types
 1. **CLI commands**
 - `node src/index.js hub --port 4242 --name "<device-name>"`
-- `node src/index.js agent --hub wss://192.168.1.10:4242 --code 123456 --name "<device-name>"`
+- `node src/index.js agent --hub wss://192.0.2.10:4242 --code 123456 --name "<device-name>"`
 
 2. **Config/state files**
 - `trusted_devices.json` (hub):

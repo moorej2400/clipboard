@@ -71,12 +71,12 @@ On macOS, outbound clipboard sync is gated by `Windows App` window state before 
 Current behavior:
 - The gate only runs on macOS.
 - The gate first checks `Windows App` through `System Events`.
-- The default session name is `Solera PC`.
-- If the `Solera PC` window is not visible, the gate falls back to the active `Windows App` RDP connection for the `Solera PC` bookmark.
+- The default session name is `Remote PC`.
+- If the configured session window is not visible, the gate falls back to the active `Windows App` RDP connection for a matching recent bookmark.
 - Each outbound clipboard or MacWhisper event that is actually sent plays a local notification sound.
 
 Notes:
-- The default required window title is `Solera PC`.
+- The default required window title is `Remote PC`.
 - You can override that title with `MAC_WINDOWS_APP_SESSION_TITLE`.
 - You can override the sound file with `MAC_CLIPBOARD_SEND_SOUND_PATH`.
 - You can override the `Windows App` bookmark database path with `MAC_WINDOWS_APP_DATA_DB_PATH`.
@@ -158,17 +158,17 @@ Create script (once):
 ```bat
 @echo off
 setlocal
-cd /d C:\Users\Jared.Moore\Dev\repos\apps\clipboard
+cd /d C:\path\to\clipboard
 set AGENT_AUTO_TRUST_FINGERPRINT=1
-"C:\Program Files\nodejs\node.exe" src\index.js agent --hub wss://<hub-ip>:4242 --fingerprint "C1:B1:93:42:01:25:30:A6:CC:08:37:4F:59:92:C9:72:C6:7F:95:21:FD:06:83:8B:FF:59:DF:38:BC:F4:AD:F1" >> "%USERPROFILE%\clipboard-agent.log" 2>&1
+"C:\Program Files\nodejs\node.exe" src\index.js agent --hub wss://<hub-ip>:4242 --fingerprint "<hub-fingerprint>" >> "%USERPROFILE%\clipboard-agent.log" 2>&1
 endlocal
 ```
 
-Replace `<hub-ip>` with the current LAN endpoint shown in `device-info.md` on the hub machine.
+Replace `<hub-ip>` and `<hub-fingerprint>` with the values shown in `device-info.md` on the hub machine.
 
 Create startup task:
 ```bat
-schtasks /Create /TN "ClipboardSyncAgent" /TR "cmd.exe /c \"C:\Users\Jared.Moore\Dev\repos\apps\clipboard\scripts\start-agent.cmd\"" /SC ONLOGON /RU "INT\jared.moore" /RL HIGHEST /IT /F
+schtasks /Create /TN "ClipboardSyncAgent" /TR "cmd.exe /c \"C:\path\to\clipboard\scripts\start-agent.cmd\"" /SC ONLOGON /RL HIGHEST /IT /F
 ```
 
 Run immediately:

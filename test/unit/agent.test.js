@@ -1,7 +1,11 @@
 const assert = require("node:assert/strict");
 const test = require("node:test");
 
-const { enqueuePendingDictationEvent, flushPendingDictationEvents } = require("../../src/agent");
+const {
+  enqueuePendingDictationEvent,
+  flushPendingDictationEvents,
+  shouldSyncClipboardText
+} = require("../../src/agent");
 
 test("Pending dictation events are queued and flushed in order", () => {
   const queue = [];
@@ -94,4 +98,10 @@ test("Pending dictation flush leaves unsent items in the queue", () => {
       dictationId: "dict-3"
     }
   ]);
+});
+
+test("Empty clipboard text is not considered syncable", () => {
+  assert.equal(shouldSyncClipboardText(""), false);
+  assert.equal(shouldSyncClipboardText("https://example.com"), true);
+  assert.equal(shouldSyncClipboardText(" "), true);
 });

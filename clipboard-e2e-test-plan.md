@@ -41,20 +41,20 @@ Purpose: trust provided/presented cert without interactive prompt in tests.
 
 ## Implementation Plan
 1. Refactor clipboard abstraction for pluggable backends.
-- Update [`src/clipboard.js`](/Users/jaredmoore/dev/apps/clipboard/src/clipboard.js) to select provider via env.
+- Update `src/clipboard.js` to select provider via env.
 - Keep current behavior as default (`system`) so runtime users are unaffected.
 - Add file-based provider logic for deterministic host/container testing.
 
 2. Add deterministic, non-interactive runtime controls.
-- Update [`src/hub.js`](/Users/jaredmoore/dev/apps/clipboard/src/hub.js):
+- Update `src/hub.js`:
 - Use `HUB_PAIR_CODE` when provided.
 - Bypass approval prompt when `HUB_AUTO_APPROVE_PAIRING=1`.
-- Update [`src/agent.js`](/Users/jaredmoore/dev/apps/clipboard/src/agent.js):
+- Update `src/agent.js`:
 - Bypass fingerprint prompt when `AGENT_AUTO_TRUST_FINGERPRINT=1`.
 - Preserve secure interactive defaults when env vars are not set.
 
 3. Add isolated storage path override.
-- Update [`src/store.js`](/Users/jaredmoore/dev/apps/clipboard/src/store.js):
+- Update `src/store.js`:
 - If `CLIPBOARD_SYNC_DATA_DIR` is set, use it as base dir.
 - Else keep existing macOS/Windows defaults.
 
@@ -77,8 +77,8 @@ Purpose: trust provided/presented cert without interactive prompt in tests.
 8. Teardown all processes/containers and clean temp state.
 
 6. Add test scripts and docs.
-- Update [`package.json`](/Users/jaredmoore/dev/apps/clipboard/package.json) with E2E scripts.
-- Update [`README.md`](/Users/jaredmoore/dev/apps/clipboard/README.md) with E2E setup/run section and prerequisites (`Docker`, `Node`).
+- Update `package.json` with E2E scripts.
+- Update `README.md` with E2E setup/run section and prerequisites (`Docker`, `Node`).
 
 ## Test Cases and Scenarios
 1. `E2E_Bidirectional_FileBackend`

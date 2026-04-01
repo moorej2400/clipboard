@@ -192,7 +192,7 @@ function printUsage() {
   console.log("Usage:");
   console.log("  npm start");
   console.log("  node src/index.js hub --port 4242 --name \"My Hub\"");
-  console.log("  node src/index.js agent --hub wss://192.168.1.10:4242 --code 123456 --name \"My Device\" --fingerprint \"AA:...\"");
+  console.log("  node src/index.js agent --hub wss://192.0.2.10:4242 --code 123456 --name \"My Device\" --fingerprint \"AA:...\"");
 }
 
 function persistHubConfiguration(paths, localDevice, { port, bindAddress }) {
