@@ -4,7 +4,8 @@ const test = require("node:test");
 const {
   buildAfplayArgs,
   createMacClipboardPolicy,
-  DEFAULT_WINDOWS_APP_SESSION_TITLE
+  DEFAULT_WINDOWS_APP_SESSION_TITLE,
+  getWindowsAppSessionTitleFromEnv
 } = require("../../src/macClipboardPolicy");
 
 test("mac clipboard policy builds afplay args with the default 95 percent volume", () => {
@@ -35,7 +36,7 @@ test("mac clipboard policy allows outbound sync on non-mac platforms without che
 test("mac clipboard policy allows outbound sync when Windows App has the configured session window open", async () => {
   const policy = createMacClipboardPolicy({
     platform: "darwin",
-    sessionTitle: DEFAULT_WINDOWS_APP_SESSION_TITLE,
+    sessionTitle: "Remote PC",
     getWindowTitles: async () => ["", "Remote PC"]
   });
 
@@ -44,6 +45,49 @@ test("mac clipboard policy allows outbound sync when Windows App has the configu
   assert.equal(result.allowed, true);
   assert.equal(result.reason, "session_window_open");
   assert.equal(result.matchedTitle, "Remote PC");
+});
+
+test("mac clipboard policy reads the Windows App PC name from env", () => {
+  assert.equal(
+    getWindowsAppSessionTitleFromEnv({
+      MAC_WINDOWS_APP_PC_NAME: "Personal Desktop"
+    }),
+    "Personal Desktop"
+  );
+  assert.equal(
+    getWindowsAppSessionTitleFromEnv({
+      MAC_WINDOWS_APP_SESSION_TITLE: "Legacy Desktop"
+    }),
+    "Legacy Desktop"
+  );
+  assert.equal(getWindowsAppSessionTitleFromEnv({}), "");
+});
+
+test("mac clipboard policy force sync bypasses Windows App checks", async () => {
+  let getWindowTitlesCalled = false;
+  const policy = createMacClipboardPolicy({
+    platform: "darwin",
+    forceSync: true,
+    getWindowTitles: async () => {
+      getWindowTitlesCalled = true;
+      return ["Unrelated Desktop"];
+    },
+    getCoreGraphicsWindowTitles: async () => {
+      throw new Error("should not query CoreGraphics");
+    },
+    getBookmarkedHosts: async () => {
+      throw new Error("should not query bookmarks");
+    },
+    listActiveRdpConnections: async () => {
+      throw new Error("should not query connections");
+    }
+  });
+
+  const result = await policy.shouldAllowOutboundSync();
+
+  assert.equal(result.allowed, true);
+  assert.equal(result.reason, "force_sync");
+  assert.equal(getWindowTitlesCalled, false);
 });
 
 test("mac clipboard policy allows outbound sync when a Windows App window title contains the configured session token", async () => {
@@ -58,6 +102,24 @@ test("mac clipboard policy allows outbound sync when a Windows App window title 
   assert.equal(result.allowed, true);
   assert.equal(result.reason, "session_window_open");
   assert.equal(result.matchedTitle, "Training VM - Finance East");
+});
+
+test("mac clipboard policy falls back to CoreGraphics window titles when System Events reports none", async () => {
+  const policy = createMacClipboardPolicy({
+    platform: "darwin",
+    sessionTitle: "Work Desktop",
+    getWindowTitles: async () => [],
+    getCoreGraphicsWindowTitles: async () => ["Work Desktop"],
+    getBookmarkedHosts: async () => [],
+    getBookmarkedHost: async () => null,
+    listActiveRdpConnections: async () => []
+  });
+
+  const result = await policy.shouldAllowOutboundSync();
+
+  assert.equal(result.allowed, true);
+  assert.equal(result.reason, "session_window_open");
+  assert.equal(result.matchedTitle, "Work Desktop");
 });
 
 test("mac clipboard policy blocks outbound sync when Windows App session window is not open", async () => {

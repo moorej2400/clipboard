@@ -220,7 +220,8 @@ test("E2E_Bidirectional_FileBackend", { timeout: 120000, skip: !DOCKER_COMPOSE }
         "--name",
         "e2e-host-agent",
         "--fingerprint",
-        hubFingerprint
+        hubFingerprint,
+        "--force-sync"
       ],
       {
         cwd: hostAgentCwd,
@@ -366,7 +367,8 @@ test("E2E_TrustedReconnect_NoRePair", { timeout: 180000, skip: !DOCKER_COMPOSE }
         "--name",
         "e2e-host-agent-initial",
         "--fingerprint",
-        hubFingerprint
+        hubFingerprint,
+        "--force-sync"
       ],
       {
         cwd: hostAgentCwd,
@@ -425,7 +427,8 @@ test("E2E_TrustedReconnect_NoRePair", { timeout: 180000, skip: !DOCKER_COMPOSE }
         "--name",
         "e2e-host-agent-restart",
         "--fingerprint",
-        hubFingerprint
+        hubFingerprint,
+        "--force-sync"
       ],
       {
         cwd: hostAgentCwd,

@@ -7,11 +7,12 @@ const test = require("node:test");
 const { parseCli, loadLocalDevice } = require("../../src/index");
 
 test("parseCli accepts bare start flags without requiring a mode", () => {
-  const result = parseCli(["--name", "Configured Device"]);
+  const result = parseCli(["--name", "Configured Device", "--force-sync"]);
 
   assert.equal(result.mode, null);
   assert.deepEqual(result.options, {
-    name: "Configured Device"
+    name: "Configured Device",
+    "force-sync": true
   });
 });
 

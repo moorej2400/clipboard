@@ -80,7 +80,37 @@ function flushPendingDictationEvents(queue, canSendClipboardEvent, emitClipboard
   return flushed;
 }
 
-async function startAgent({ hubUrl, pairCode, expectedFingerprint, localDevice, saveLocalDevice, logger }) {
+function createSerializedAsyncTask(task) {
+  let inFlight = false;
+
+  return async function runSerializedAsyncTask(...args) {
+    if (inFlight) {
+      return false;
+    }
+
+    inFlight = true;
+    try {
+      await task(...args);
+      return true;
+    } finally {
+      inFlight = false;
+    }
+  };
+}
+
+function shouldSuppressClipboardEcho(currentText, suppressedText, suppressUntil, now = Date.now()) {
+  return now < suppressUntil && currentText === suppressedText;
+}
+
+async function startAgent({
+  hubUrl,
+  pairCode,
+  expectedFingerprint,
+  localDevice,
+  saveLocalDevice,
+  logger,
+  forceSync = false
+}) {
   const autoTrustFingerprint = process.env.AGENT_AUTO_TRUST_FINGERPRINT === "1";
   let currentPairCode = isString(pairCode) ? pairCode : null;
   let reconnectDelayMs = 1000;
@@ -91,6 +121,7 @@ async function startAgent({ hubUrl, pairCode, expectedFingerprint, localDevice, 
   let dictationPollTimer = null;
   let dictationPollInFlight = false;
   let suppressBroadcastUntil = 0;
+  let suppressedBroadcastText = null;
   let lastAppliedTimestamp = 0;
   let lastClipboardText = "";
   let lastObservedClipboardText = "";
@@ -99,7 +130,7 @@ async function startAgent({ hubUrl, pairCode, expectedFingerprint, localDevice, 
   let lastClipboardReadErrorKey = "";
   const seenEventIds = new Map();
   const macWhisperSource = createMacWhisperSource();
-  const macClipboardPolicy = createMacClipboardPolicy();
+  const macClipboardPolicy = createMacClipboardPolicy(forceSync ? { forceSync } : {});
 
   try {
     lastClipboardText = await readClipboardText();
@@ -266,13 +297,14 @@ async function startAgent({ hubUrl, pairCode, expectedFingerprint, localDevice, 
     seenEventIds.set(message.eventId, Date.now());
     cleanupSeenEvents();
 
-    // We intentionally suppress outbound publish briefly after applying remote clipboard
-    // so synchronized devices do not echo the same payload back and forth.
-    suppressBroadcastUntil = Date.now() + 1500;
     try {
       await writeClipboardText(message.text);
       lastClipboardText = message.text;
       lastObservedClipboardText = message.text;
+      // Suppress only this exact payload briefly so synchronized devices do not
+      // echo it back, while still allowing rapid follow-up local edits through.
+      suppressBroadcastUntil = Date.now() + 1500;
+      suppressedBroadcastText = message.text;
       if (logger) {
         logger.info("clipboard_event_applied", {
           direction: "remote_to_local",
@@ -328,6 +360,7 @@ async function startAgent({ hubUrl, pairCode, expectedFingerprint, localDevice, 
     while (pendingDictationEvents.length > 0 && canSendClipboardEvent()) {
       const nextEvent = pendingDictationEvents[0];
       suppressBroadcastUntil = Date.now() + 1500;
+      suppressedBroadcastText = nextEvent.text;
       const result = await attemptOutboundClipboardSync(nextEvent.text, {
         source: "macwhisper_reconnect_flush",
         dictationId: nextEvent.dictationId
@@ -380,6 +413,7 @@ async function startAgent({ hubUrl, pairCode, expectedFingerprint, localDevice, 
 
     if (canSendClipboardEvent()) {
       suppressBroadcastUntil = Date.now() + 1500;
+      suppressedBroadcastText = dictation.text;
       const result = await attemptOutboundClipboardSync(dictation.text, {
         source: "macwhisper_poll",
         dictationId: dictation.idHex
@@ -418,7 +452,10 @@ async function startAgent({ hubUrl, pairCode, expectedFingerprint, localDevice, 
     if (clipboardPollTimer) {
       return;
     }
-    clipboardPollTimer = setInterval(async () => {
+
+    // Windows clipboard reads spawn a PowerShell process; overlapping reads can
+    // contend for the desktop clipboard and produce persistent ExternalException noise.
+    const pollClipboardOnce = createSerializedAsyncTask(async () => {
       if (!authenticated || !ws || ws.readyState !== WebSocket.OPEN) {
         return;
       }
@@ -481,7 +518,7 @@ async function startAgent({ hubUrl, pairCode, expectedFingerprint, localDevice, 
         });
       }
 
-      if (Date.now() < suppressBroadcastUntil) {
+      if (shouldSuppressClipboardEcho(currentText, suppressedBroadcastText, suppressBroadcastUntil)) {
         if (logger) {
           logger.info("clipboard_local_change_suppressed", {
             reason: "suppression_window",
@@ -493,6 +530,10 @@ async function startAgent({ hubUrl, pairCode, expectedFingerprint, localDevice, 
 
       lastClipboardText = currentText;
       await attemptOutboundClipboardSync(currentText, { source: "clipboard_poll" });
+    });
+
+    clipboardPollTimer = setInterval(() => {
+      void pollClipboardOnce();
     }, CLIPBOARD_POLL_INTERVAL_MS);
   }
 
@@ -764,8 +805,10 @@ async function startAgent({ hubUrl, pairCode, expectedFingerprint, localDevice, 
 }
 
 module.exports = {
+  createSerializedAsyncTask,
   enqueuePendingDictationEvent,
   flushPendingDictationEvents,
+  shouldSuppressClipboardEcho,
   shouldSyncClipboardText,
   startAgent
 };

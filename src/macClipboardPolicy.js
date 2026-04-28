@@ -6,7 +6,7 @@ const { promisify } = require("util");
 
 const execFileAsync = promisify(execFile);
 
-const DEFAULT_WINDOWS_APP_SESSION_TITLE = "Remote PC";
+const DEFAULT_WINDOWS_APP_SESSION_TITLE = "";
 // Preferred clipboard send sounds are Submarine and Ping. Default to Submarine for now,
 // with the path kept centralized so it can be changed easily later if tastes shift.
 const DEFAULT_SEND_SOUND_PATH = "/System/Library/Sounds/Submarine.aiff";
@@ -33,6 +33,20 @@ const WINDOWS_APP_WINDOW_QUERY = [
   "JSON.stringify(names);"
 ].join("\n");
 
+const WINDOWS_APP_CORE_GRAPHICS_WINDOW_QUERY = [
+  "import Foundation",
+  "import CoreGraphics",
+  "let options = CGWindowListOption(arrayLiteral: .optionAll)",
+  "let windowInfo = CGWindowListCopyWindowInfo(options, kCGNullWindowID) as? [[String: Any]] ?? []",
+  "let names = windowInfo.compactMap { row -> String? in",
+  "  guard String(describing: row[kCGWindowOwnerName as String] ?? \"\") == \"Windows App\" else { return nil }",
+  "  let name = String(describing: row[kCGWindowName as String] ?? \"\").trimmingCharacters(in: .whitespacesAndNewlines)",
+  "  return name.isEmpty ? nil : name",
+  "}",
+  "let data = try! JSONSerialization.data(withJSONObject: names, options: [])",
+  "FileHandle.standardOutput.write(data)"
+].join("\n");
+
 async function listWindowsAppWindowTitles() {
   const { stdout } = await execFileAsync("osascript", ["-l", "JavaScript", "-e", WINDOWS_APP_WINDOW_QUERY], {
     maxBuffer: 1024 * 1024
@@ -41,6 +55,19 @@ async function listWindowsAppWindowTitles() {
   const parsed = JSON.parse(String(stdout || "[]").trim() || "[]");
   if (!Array.isArray(parsed)) {
     throw new Error("Windows App window query returned a non-array payload");
+  }
+
+  return parsed.map((value) => String(value || "").trim());
+}
+
+async function listWindowsAppCoreGraphicsWindowTitles() {
+  const { stdout } = await execFileAsync("swift", ["-e", WINDOWS_APP_CORE_GRAPHICS_WINDOW_QUERY], {
+    maxBuffer: 1024 * 1024
+  });
+
+  const parsed = JSON.parse(String(stdout || "[]").trim() || "[]");
+  if (!Array.isArray(parsed)) {
+    throw new Error("Windows App CoreGraphics query returned a non-array payload");
   }
 
   return parsed.map((value) => String(value || "").trim());
@@ -71,6 +98,14 @@ function dedupeNonEmptyStrings(values) {
         .filter((value) => value.length > 0)
     )
   );
+}
+
+function isTruthyEnvValue(value) {
+  return /^(1|true|yes|on)$/i.test(String(value || "").trim());
+}
+
+function getWindowsAppSessionTitleFromEnv(env = process.env) {
+  return String(env.MAC_WINDOWS_APP_PC_NAME || env.MAC_WINDOWS_APP_SESSION_TITLE || "").trim();
 }
 
 async function getBookmarkedHostsForSession(
@@ -179,20 +214,24 @@ async function listActiveWindowsAppRdpConnections() {
     .filter(Boolean);
 }
 
-function createMacClipboardPolicy({
-  platform = process.platform,
-  sessionTitle = process.env.MAC_WINDOWS_APP_SESSION_TITLE || DEFAULT_WINDOWS_APP_SESSION_TITLE,
-  getWindowTitles = listWindowsAppWindowTitles,
-  getBookmarkedHosts = (title) => getBookmarkedHostsForSession(title),
-  getBookmarkedHost = (title) => getBookmarkedHostForSession(title),
-  listActiveRdpConnections = listActiveWindowsAppRdpConnections,
-  lookupHostAddresses = defaultLookupHostAddresses,
-  playSendSound = () =>
-    playMacSendSound(
-      process.env.MAC_CLIPBOARD_SEND_SOUND_PATH || DEFAULT_SEND_SOUND_PATH,
-      process.env.MAC_CLIPBOARD_SEND_VOLUME || DEFAULT_SEND_SOUND_VOLUME
-    )
-} = {}) {
+function createMacClipboardPolicy(options = {}) {
+  const env = options.env || process.env;
+  const {
+    platform = process.platform,
+    sessionTitle = getWindowsAppSessionTitleFromEnv(env) || DEFAULT_WINDOWS_APP_SESSION_TITLE,
+    forceSync = isTruthyEnvValue(env.MAC_CLIPBOARD_FORCE_SYNC),
+    getWindowTitles = listWindowsAppWindowTitles,
+    getCoreGraphicsWindowTitles = listWindowsAppCoreGraphicsWindowTitles,
+    getBookmarkedHosts = (title) => getBookmarkedHostsForSession(title),
+    getBookmarkedHost = (title) => getBookmarkedHostForSession(title),
+    listActiveRdpConnections = listActiveWindowsAppRdpConnections,
+    lookupHostAddresses = defaultLookupHostAddresses,
+    playSendSound = () =>
+      playMacSendSound(
+        env.MAC_CLIPBOARD_SEND_SOUND_PATH || DEFAULT_SEND_SOUND_PATH,
+        env.MAC_CLIPBOARD_SEND_VOLUME || DEFAULT_SEND_SOUND_VOLUME
+      )
+  } = options;
   const enabled = platform === "darwin";
 
   return {
@@ -212,6 +251,13 @@ function createMacClipboardPolicy({
         };
       }
 
+      if (forceSync) {
+        return {
+          allowed: true,
+          reason: "force_sync"
+        };
+      }
+
       let windowQueryError = null;
       let observedWindowTitles = [];
       try {
@@ -224,6 +270,22 @@ function createMacClipboardPolicy({
             allowed: true,
             reason: "session_window_open",
             matchedTitle
+          };
+        }
+
+        // System Events can report zero Windows App windows even while the RDP
+        // surface is visible. CoreGraphics still exposes the rendered title.
+        const coreGraphicsWindowTitles = await getCoreGraphicsWindowTitles();
+        observedWindowTitles = dedupeNonEmptyStrings([...observedWindowTitles, ...coreGraphicsWindowTitles]);
+        const matchedCoreGraphicsTitle = coreGraphicsWindowTitles.find((title) =>
+          isMatchingSessionWindowTitle(title, sessionTitle)
+        );
+
+        if (matchedCoreGraphicsTitle) {
+          return {
+            allowed: true,
+            reason: "session_window_open",
+            matchedTitle: matchedCoreGraphicsTitle
           };
         }
       } catch (error) {
@@ -305,10 +367,12 @@ module.exports = {
   DEFAULT_WINDOWS_APP_SESSION_TITLE,
   DEFAULT_SEND_SOUND_VOLUME,
   createMacClipboardPolicy,
+  getWindowsAppSessionTitleFromEnv,
   getBookmarkedHostsForSession,
   getBookmarkedHostForSession,
   lookupHostAddresses: defaultLookupHostAddresses,
   listActiveWindowsAppRdpConnections,
+  listWindowsAppCoreGraphicsWindowTitles,
   listWindowsAppWindowTitles,
   parseLsofRemoteEndpoint,
   playMacSendSound

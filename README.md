@@ -71,13 +71,13 @@ On macOS, outbound clipboard sync is gated by `Windows App` window state before 
 Current behavior:
 - The gate only runs on macOS.
 - The gate first checks `Windows App` through `System Events`.
-- The default session name is `Remote PC`.
+- Set the required Windows App PC/window name with `MAC_WINDOWS_APP_PC_NAME`.
 - If the configured session window is not visible, the gate falls back to the active `Windows App` RDP connection for a matching recent bookmark.
 - Each outbound clipboard or MacWhisper event that is actually sent plays a local notification sound.
 
 Notes:
-- The default required window title is `Remote PC`.
-- You can override that title with `MAC_WINDOWS_APP_SESSION_TITLE`.
+- `MAC_WINDOWS_APP_SESSION_TITLE` is still accepted as a legacy alias for `MAC_WINDOWS_APP_PC_NAME`.
+- To bypass the Windows App gate for a run, use `npm start -- --force-sync`.
 - You can override the sound file with `MAC_CLIPBOARD_SEND_SOUND_PATH`.
 - You can override the `Windows App` bookmark database path with `MAC_WINDOWS_APP_DATA_DB_PATH`.
 
@@ -150,37 +150,99 @@ Common files:
 - `trusted_devices.json` (hub)
 - `tls-key.pem` and `tls-cert.pem` (hub)
 
-## Windows Startup Task (Recommended)
+## Windows Background Startup (Recommended)
 
-For reliable clipboard sync on Windows, run the agent in the interactive user session at logon.
+For reliable clipboard sync on Windows, run the agent from Task Scheduler at user logon. This is preferred over a true Windows Service because clipboard access belongs to the interactive desktop session. The task can still run hidden, start automatically, and keep the app alive in the background.
 
-Create script (once):
-```bat
-@echo off
-setlocal
-cd /d C:\path\to\clipboard
-set AGENT_AUTO_TRUST_FINGERPRINT=1
-"C:\Program Files\nodejs\node.exe" src\index.js agent --hub wss://<hub-ip>:4242 --fingerprint "<hub-fingerprint>" >> "%USERPROFILE%\clipboard-agent.log" 2>&1
-endlocal
+Create `scripts\start-agent-background.ps1`:
+```powershell
+$ErrorActionPreference = 'Continue'
+
+$repoRoot = 'C:\path\to\clipboard'
+$nodePath = 'C:\Program Files\nodejs\node.exe'
+$hubUrl = 'wss://<hub-ip>:4242'
+$fingerprint = '<hub-fingerprint>'
+$agentLog = Join-Path $env:USERPROFILE 'clipboard-agent.log'
+$launcherLog = Join-Path $env:USERPROFILE 'clipboard-launcher.log'
+$restartDelaySeconds = 5
+
+$env:AGENT_AUTO_TRUST_FINGERPRINT = '1'
+
+function Write-LauncherLog {
+  param([string]$Message)
+  $timestamp = Get-Date -Format 'yyyy-MM-ddTHH:mm:ssK'
+  Add-Content -Path $launcherLog -Value "[$timestamp] $Message"
+}
+
+Set-Location $repoRoot
+Write-LauncherLog 'background launcher started'
+
+while ($true) {
+  Write-LauncherLog 'starting clipboard agent'
+  $exitCode = 1
+
+  try {
+    & $nodePath 'src\index.js' 'agent' '--hub' $hubUrl '--fingerprint' $fingerprint *>> $agentLog
+    if ($null -ne $LASTEXITCODE) {
+      $exitCode = $LASTEXITCODE
+    }
+  } catch {
+    Write-LauncherLog ("launcher exception: " + $_.Exception.Message)
+  }
+
+  Write-LauncherLog "clipboard agent exited with code $exitCode; restarting in $restartDelaySeconds seconds"
+  Start-Sleep -Seconds $restartDelaySeconds
+}
 ```
 
 Replace `<hub-ip>` and `<hub-fingerprint>` with the values shown in `device-info.md` on the hub machine.
 
-Create startup task:
-```bat
-schtasks /Create /TN "ClipboardSyncAgent" /TR "cmd.exe /c \"C:\path\to\clipboard\scripts\start-agent.cmd\"" /SC ONLOGON /RL HIGHEST /IT /F
+Create the hidden logon task from an elevated PowerShell prompt:
+```powershell
+$scriptPath = 'C:\path\to\clipboard\scripts\start-agent-background.ps1'
+$action = New-ScheduledTaskAction `
+  -Execute 'powershell.exe' `
+  -Argument "-WindowStyle Hidden -NoProfile -ExecutionPolicy Bypass -File `"$scriptPath`""
+$trigger = New-ScheduledTaskTrigger -AtLogOn
+$userId = (whoami)
+$principal = New-ScheduledTaskPrincipal `
+  -UserId $userId `
+  -LogonType Interactive `
+  -RunLevel Highest
+$settings = New-ScheduledTaskSettingsSet `
+  -AllowStartIfOnBatteries `
+  -DontStopIfGoingOnBatteries `
+  -ExecutionTimeLimit (New-TimeSpan -Seconds 0) `
+  -MultipleInstances IgnoreNew
+
+Register-ScheduledTask `
+  -TaskName 'ClipboardSyncAgent' `
+  -Action $action `
+  -Trigger $trigger `
+  -Principal $principal `
+  -Settings $settings `
+  -Force
 ```
 
-Run immediately:
-```bat
-schtasks /Run /TN "ClipboardSyncAgent"
+Start it without rebooting:
+```powershell
+Start-ScheduledTask -TaskName 'ClipboardSyncAgent'
 ```
 
-Verify:
-```bat
+Verify the setup:
+```powershell
+Get-ScheduledTask -TaskName 'ClipboardSyncAgent' | Get-ScheduledTaskInfo
+Get-Content "$env:USERPROFILE\clipboard-launcher.log" -Tail 20
+Get-Content "$env:USERPROFILE\clipboard-agent.log" -Tail 20
 netstat -ano | findstr "<hub-ip>:4242"
 ```
-Look for `ESTABLISHED`.
+
+Expected behavior:
+- Task Scheduler shows `ClipboardSyncAgent` as `Running` after logon.
+- No console window remains open because PowerShell starts with `-WindowStyle Hidden`.
+- `clipboard-launcher.log` records restarts.
+- `clipboard-agent.log` contains normal app output.
+- The launcher restarts the agent if Node exits.
 
 ## Setup Notes Learned In Practice
 

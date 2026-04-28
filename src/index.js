@@ -191,6 +191,7 @@ function buildAgentMarkdown({ deviceName, deviceId, hubUrl, hubFingerprint }) {
 function printUsage() {
   console.log("Usage:");
   console.log("  npm start");
+  console.log("  npm start -- --force-sync");
   console.log("  node src/index.js hub --port 4242 --name \"My Hub\"");
   console.log("  node src/index.js agent --hub wss://192.0.2.10:4242 --code 123456 --name \"My Device\" --fingerprint \"AA:...\"");
 }
@@ -207,6 +208,10 @@ function persistAgentConfiguration(paths, localDevice, { hubUrl }) {
   localDevice.role = "agent";
   localDevice.hubUrl = hubUrl;
   saveLocalDevice(paths, localDevice);
+}
+
+function isForceSyncOptionEnabled(options) {
+  return options["force-sync"] === true || options.forceSync === true;
 }
 
 async function startConfiguredHub({ options, paths, localDevice, logger, markdownPath }) {
@@ -293,7 +298,8 @@ async function startConfiguredAgent({
       typeof options.fingerprint === "string" ? options.fingerprint : localDevice.hubFingerprint || fallbackFingerprint,
     localDevice,
     saveLocalDevice: (updated) => saveLocalDevice(paths, updated),
-    logger
+    logger,
+    forceSync: isForceSyncOptionEnabled(options)
   });
 }
 
@@ -355,5 +361,6 @@ module.exports = {
   parseCli,
   loadLocalDevice,
   isValidRole,
-  inferStoredRole
+  inferStoredRole,
+  isForceSyncOptionEnabled
 };
