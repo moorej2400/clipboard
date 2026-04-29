@@ -8,6 +8,8 @@ const { createMacClipboardPolicy } = require("./macClipboardPolicy");
 
 const CLIPBOARD_POLL_INTERVAL_MS = 500;
 const DICTATION_POLL_INTERVAL_MS = 500;
+const DEFAULT_REMOTE_CLIPBOARD_SUPPRESSION_MS = 1500;
+const WINDOWS_REMOTE_CLIPBOARD_SUPPRESSION_MS = 2500;
 
 function promptInput(question) {
   return new Promise((resolve) => {
@@ -110,6 +112,10 @@ function shouldSuppressClipboardEcho(
 
 function shouldApplyIncomingClipboardText(incomingText, currentText) {
   return typeof currentText !== "string" || incomingText !== currentText;
+}
+
+function getRemoteClipboardSuppressionMs(platform = process.platform) {
+  return platform === "win32" ? WINDOWS_REMOTE_CLIPBOARD_SUPPRESSION_MS : DEFAULT_REMOTE_CLIPBOARD_SUPPRESSION_MS;
 }
 
 async function startAgent({
@@ -335,7 +341,7 @@ async function startAgent({
       lastObservedClipboardText = message.text;
       // Windows/RDP can rewrite a just-applied clipboard value into a different
       // text payload; suppress that short post-write churn before it is echoed.
-      suppressBroadcastUntil = Date.now() + 1500;
+      suppressBroadcastUntil = Date.now() + getRemoteClipboardSuppressionMs();
       suppressedBroadcastText = message.text;
       if (logger) {
         logger.info("clipboard_event_applied", {
@@ -485,7 +491,7 @@ async function startAgent({
       return;
     }
 
-    // Windows clipboard reads spawn a PowerShell process; overlapping reads can
+    // Windows clipboard reads spawn a helper process; overlapping reads can
     // contend for the desktop clipboard and produce persistent ExternalException noise.
     const pollClipboardOnce = createSerializedAsyncTask(async () => {
       if (!authenticated || !ws || ws.readyState !== WebSocket.OPEN) {
@@ -844,6 +850,7 @@ module.exports = {
   createSerializedAsyncTask,
   enqueuePendingDictationEvent,
   flushPendingDictationEvents,
+  getRemoteClipboardSuppressionMs,
   shouldApplyIncomingClipboardText,
   shouldSuppressClipboardEcho,
   shouldSyncClipboardText,

@@ -5,6 +5,7 @@ const {
   createSerializedAsyncTask,
   enqueuePendingDictationEvent,
   flushPendingDictationEvents,
+  getRemoteClipboardSuppressionMs,
   shouldApplyIncomingClipboardText,
   shouldSuppressClipboardEcho,
   shouldSyncClipboardText
@@ -173,6 +174,12 @@ test("Clipboard echo suppression can quarantine transformed remote writes", () =
     }),
     false
   );
+});
+
+test("Remote clipboard suppression is longer on Windows for RDP clipboard churn", () => {
+  assert.equal(getRemoteClipboardSuppressionMs("win32"), 2500);
+  assert.equal(getRemoteClipboardSuppressionMs("darwin"), 1500);
+  assert.equal(getRemoteClipboardSuppressionMs("linux"), 1500);
 });
 
 test("Incoming clipboard text is ignored when the local clipboard already matches", () => {
