@@ -158,6 +158,23 @@ test("Clipboard echo suppression only blocks the exact recent payload", () => {
   assert.equal(shouldSuppressClipboardEcho("remote text", "remote text", suppressUntil, 2500), false);
 });
 
+test("Clipboard echo suppression can quarantine transformed remote writes", () => {
+  const suppressUntil = 2000;
+
+  assert.equal(
+    shouldSuppressClipboardEcho("remote text plus RDP marker", "remote text", suppressUntil, 1500, {
+      suppressChangedText: true
+    }),
+    true
+  );
+  assert.equal(
+    shouldSuppressClipboardEcho("remote text plus RDP marker", "remote text", suppressUntil, 2500, {
+      suppressChangedText: true
+    }),
+    false
+  );
+});
+
 test("Incoming clipboard text is ignored when the local clipboard already matches", () => {
   assert.equal(shouldApplyIncomingClipboardText("same text", "same text"), false);
   assert.equal(shouldApplyIncomingClipboardText("remote text", "local text"), true);

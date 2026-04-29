@@ -98,8 +98,14 @@ function createSerializedAsyncTask(task) {
   };
 }
 
-function shouldSuppressClipboardEcho(currentText, suppressedText, suppressUntil, now = Date.now()) {
-  return now < suppressUntil && currentText === suppressedText;
+function shouldSuppressClipboardEcho(
+  currentText,
+  suppressedText,
+  suppressUntil,
+  now = Date.now(),
+  { suppressChangedText = false } = {}
+) {
+  return now < suppressUntil && (suppressChangedText || currentText === suppressedText);
 }
 
 function shouldApplyIncomingClipboardText(incomingText, currentText) {
@@ -327,8 +333,8 @@ async function startAgent({
       await writeClipboardText(message.text);
       lastClipboardText = message.text;
       lastObservedClipboardText = message.text;
-      // Suppress only this exact payload briefly so synchronized devices do not
-      // echo it back, while still allowing rapid follow-up local edits through.
+      // Windows/RDP can rewrite a just-applied clipboard value into a different
+      // text payload; suppress that short post-write churn before it is echoed.
       suppressBroadcastUntil = Date.now() + 1500;
       suppressedBroadcastText = message.text;
       if (logger) {
@@ -544,7 +550,11 @@ async function startAgent({
         });
       }
 
-      if (shouldSuppressClipboardEcho(currentText, suppressedBroadcastText, suppressBroadcastUntil)) {
+      if (
+        shouldSuppressClipboardEcho(currentText, suppressedBroadcastText, suppressBroadcastUntil, Date.now(), {
+          suppressChangedText: process.platform === "win32"
+        })
+      ) {
         if (logger) {
           logger.info("clipboard_local_change_suppressed", {
             reason: "suppression_window",
