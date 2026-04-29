@@ -5,6 +5,7 @@ const {
   createSerializedAsyncTask,
   enqueuePendingDictationEvent,
   flushPendingDictationEvents,
+  shouldApplyIncomingClipboardText,
   shouldSuppressClipboardEcho,
   shouldSyncClipboardText
 } = require("../../src/agent");
@@ -155,4 +156,10 @@ test("Clipboard echo suppression only blocks the exact recent payload", () => {
   assert.equal(shouldSuppressClipboardEcho("remote text", "remote text", suppressUntil, 1500), true);
   assert.equal(shouldSuppressClipboardEcho("local edit", "remote text", suppressUntil, 1500), false);
   assert.equal(shouldSuppressClipboardEcho("remote text", "remote text", suppressUntil, 2500), false);
+});
+
+test("Incoming clipboard text is ignored when the local clipboard already matches", () => {
+  assert.equal(shouldApplyIncomingClipboardText("same text", "same text"), false);
+  assert.equal(shouldApplyIncomingClipboardText("remote text", "local text"), true);
+  assert.equal(shouldApplyIncomingClipboardText("remote text", null), true);
 });

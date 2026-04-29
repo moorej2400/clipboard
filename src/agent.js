@@ -102,6 +102,10 @@ function shouldSuppressClipboardEcho(currentText, suppressedText, suppressUntil,
   return now < suppressUntil && currentText === suppressedText;
 }
 
+function shouldApplyIncomingClipboardText(incomingText, currentText) {
+  return typeof currentText !== "string" || incomingText !== currentText;
+}
+
 async function startAgent({
   hubUrl,
   pairCode,
@@ -298,6 +302,28 @@ async function startAgent({
     cleanupSeenEvents();
 
     try {
+      let currentClipboardText = null;
+      try {
+        currentClipboardText = await readClipboardText();
+      } catch (_error) {
+        currentClipboardText = null;
+      }
+
+      // Avoid rewriting the OS clipboard for a fresh remote event that carries
+      // the value already present locally; that rewrite can be observed as a new copy.
+      if (!shouldApplyIncomingClipboardText(message.text, currentClipboardText)) {
+        lastClipboardText = message.text;
+        lastObservedClipboardText = message.text;
+        if (logger) {
+          logger.info("clipboard_event_ignored_current_match", {
+            direction: "remote_to_local",
+            eventId: message.eventId,
+            ...summarizeText(message.text)
+          });
+        }
+        return;
+      }
+
       await writeClipboardText(message.text);
       lastClipboardText = message.text;
       lastObservedClipboardText = message.text;
@@ -808,6 +834,7 @@ module.exports = {
   createSerializedAsyncTask,
   enqueuePendingDictationEvent,
   flushPendingDictationEvents,
+  shouldApplyIncomingClipboardText,
   shouldSuppressClipboardEcho,
   shouldSyncClipboardText,
   startAgent
